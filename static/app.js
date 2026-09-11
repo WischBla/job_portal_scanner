@@ -1,6 +1,8 @@
 (() => {
   const STATUS = ['Vorbereitung','Beworben','Eingangsbestätigung','Screening / HR','Interview 1','Interview 2','Case / Assessment','Final Interview','Angebot','On Hold','Abgelehnt','Zurückgezogen'];
-  const state = { applications: [], dashboard: null, selectedId: null, scoutJobs: [], scoutSummary: null, scoutProfile: null, sources: [], scoutBusy: false };
+  // The search profile is NEVER cached here. The backend row is the only source
+  // of truth; every render re-reads it so UI and scanner cannot drift apart.
+  const state = { applications: [], dashboard: null, selectedId: null, scoutJobs: [], scoutSummary: null, profile: null, sources: [], scoutBusy: false };
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const fmtDate = iso => {
@@ -73,39 +75,188 @@
   async function showDetail(id){ const [app,events]=await Promise.all([api(`/api/applications/${id}`),api(`/api/applications/${id}/events`)]); state.selectedId=id; $('detailTitle').textContent=app.company; $('detailSubtitle').textContent=app.position; $('jobLinkBtn').classList.toggle('hidden',!app.job_url); $('jobLinkBtn').href=app.job_url||'#'; $('detailSummary').innerHTML=[['Status',app.status],['Priorität',app.priority],['Beworben',fmtDate(app.applied_date)],['Letzte Rückmeldung',fmtDate(app.last_response)],['Nächste Aktion',app.next_action||'—'],['Follow-up',fmtDate(app.follow_up_date)],['Kontakt',app.contact_name||'—'],['Gehaltsband',app.salary_range||'—']].map(([label,value])=>`<div class="detail-chip"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(''); $('timeline').innerHTML=events.map(ev=>`<div class="timeline-item"><div class="timeline-date">${fmtDate(ev.event_date)}</div><div class="timeline-dot"></div><div class="timeline-body"><strong>${esc(ev.event_type)}${ev.person?` · ${esc(ev.person)}`:''}</strong>${ev.note?`<p>${esc(ev.note)}</p>`:''}${ev.next_step?`<small>Nächster Schritt: ${esc(ev.next_step)}${ev.follow_up_date?` · ${fmtDate(ev.follow_up_date)}`:''}</small>`:''}</div><button type="button" class="timeline-delete" data-delete-event="${ev.id}" title="Ereignis löschen">×</button></div>`).join(''); $('timelineEmpty').classList.toggle('hidden',events.length>0); openModal('detailModal'); }
 
   // ---- Job Scout ----
+  const STATE_LABEL = {NEW:'Neu',SEEN:'Gesehen',SAVED:'Gemerkt',IGNORED:'Ignoriert',APPLIED:'Übernommen',EXPIRED:'Abgelaufen'};
+  const BASE_LOCATIONS = ['Zurich','Zug','Luzern','Bern','Basel','St. Gallen','Schwyz','Aargau','Lugano','Geneva','Winterthur','Lausanne'];
+  const REJECT_LABEL = {
+    not_switzerland:'Nicht Schweiz', country_not_allowed:'Land nicht erlaubt',
+    location_not_selected:'Ort nicht ausgewählt', onsite_outside_switzerland:'Onsite ausserhalb CH',
+    work_model:'Arbeitsmodell', excluded_title:'Titel ausgeschlossen',
+    impossible_seniority:'Seniorität zu niedrig', unrelated_function:'Andere Fachrichtung',
+    excluded_keyword:'Ausschlussbegriff', missing_required_keyword:'Pflicht-Keyword fehlt',
+    salary_below_minimum:'Gehalt zu tief', missing_salary:'Kein Gehalt', malformed:'Unvollständig',
+    below_minimum_score:'Score unter Minimum'
+  };
+
   function salaryText(job){
     if (job.salary_min==null && job.salary_max==null) return '';
     const fmt=n=>Number(n).toLocaleString('de-CH',{maximumFractionDigits:0});
     const range=job.salary_min!=null&&job.salary_max!=null?`${fmt(job.salary_min)}–${fmt(job.salary_max)}`:fmt(job.salary_min??job.salary_max);
     return `${range}${job.salary_currency?' '+job.salary_currency:''}${job.salary_period?' / '+job.salary_period:''}`;
   }
-  function scoreClass(score){ return score>=82?'excellent':score>=70?'strong':score>=58?'review':'weak'; }
-  function reviewPill(job){ if(job.review_state==='Gemerkt') return '<span class="pill saved">Gemerkt</span>'; if(job.review_state==='Übernommen') return '<span class="pill offer">In Bewerbungen</span>'; if(job.review_state==='Ignoriert') return '<span class="pill rejected">Ignoriert</span>'; return job.is_new?'<span class="pill a">Neu</span>':''; }
+  function scoreClass(score){ return score>=85?'excellent':score>=70?'strong':score>=55?'review':'weak'; }
+  function statePill(job){
+    if(job.state==='SAVED') return '<span class="pill saved">Gemerkt</span>';
+    if(job.state==='APPLIED') return '<span class="pill offer">In Bewerbungen</span>';
+    if(job.state==='IGNORED') return '<span class="pill rejected">Ignoriert</span>';
+    return job.is_new?'<span class="pill a">Neu</span>':'';
+  }
+  function locationLine(job){
+    const bits=[];
+    if(job.normalized_city&&job.normalized_country) bits.push(`${job.normalized_city}, ${job.normalized_country}`);
+    else if(job.normalized_country) bits.push(job.normalized_country);
+    else if(job.raw_location) bits.push(job.raw_location);
+    if(job.work_model&&job.work_model!=='Unknown') bits.push(job.work_model);
+    if(job.office_days!=null) bits.push(`${job.office_days} Bürotage`);
+    if(job.location_confidence==='medium') bits.push('Standort aus Beschreibung');
+    return bits;
+  }
 
   async function loadScout(){
-    const params=new URLSearchParams(); const s=$('scoutSearch').value.trim(); const st=$('scoutStateFilter').value; const score=$('scoutScoreFilter').value;
-    if(s)params.set('search',s); if(st)params.set('state',st); if(score)params.set('min_score',score); if($('scoutNewOnly').checked)params.set('new_only','1');
-    const [jobs,summary,profile,sources]=await Promise.all([api(`/api/scout/jobs?${params}`),api('/api/scout/summary'),state.scoutProfile?Promise.resolve(state.scoutProfile):api('/api/scout/profile'),api('/api/scout/sources')]);
-    state.scoutJobs=jobs; state.scoutSummary=summary; state.scoutProfile=profile; state.sources=sources; renderScout(); renderSourcesSummary();
+    const params=new URLSearchParams();
+    const s=$('scoutSearch').value.trim(), st=$('scoutStateFilter').value;
+    if(s)params.set('search',s); if(st)params.set('state',st);
+    if($('scoutNewOnly').checked)params.set('new_only','1');
+    // Always re-read the profile from the backend - no local copy.
+    const [jobs,summary,profile,sources,rejected]=await Promise.all([
+      api(`/api/scout/jobs?${params}`), api('/api/scout/summary'), api('/api/search-profile'),
+      api('/api/scout/sources'), api('/api/scout/rejected?limit=250')
+    ]);
+    state.scoutJobs=jobs; state.scoutSummary=summary; state.profile=profile; state.sources=sources; state.rejected=rejected;
+    renderFilterPanel(profile); renderScout(); renderRejected(rejected); renderSourcesSummary();
+  }
+
+  // ---- Filter panel (backend-backed) ----
+  function renderChecks(containerId, options, selected, name){
+    const chosen=new Set((selected||[]).map(x=>String(x).toLowerCase()));
+    $(containerId).innerHTML=options.map((opt,i)=>
+      `<label class="chip-check"><input type="checkbox" data-group="${name}" value="${esc(opt)}" ${chosen.has(String(opt).toLowerCase())?'checked':''}> ${esc(opt)}</label>`).join('');
+  }
+  function readChecks(name){
+    return Array.from(document.querySelectorAll(`input[data-group="${name}"]:checked`)).map(el=>el.value);
+  }
+
+  function renderFilterPanel(p){
+    $('fCountryMode').value=p.country_mode||'strict';
+    $('fMinScore').value=p.minimum_match_score??65;
+    $('fOfficeDays').value=p.hybrid_max_office_days??2;
+    $('fMinSalary').value=p.minimum_salary_chf??0;
+    $('fAutoHours').value=p.auto_hours??12;
+    $('fAllowMissingSalary').checked=!!p.allow_missing_salary;
+    const rp=p.remote_policy||{};
+    $('fRemote').checked=rp.allow_remote!==false;
+    $('fHybrid').checked=rp.allow_hybrid!==false;
+    $('fOnsite').checked=rp.allow_onsite!==false;
+    const locOptions=Array.from(new Set([...(p.allowed_locations||[]),...(p.optional_locations||[]),...BASE_LOCATIONS]));
+    renderChecks('fLocations',locOptions,p.allowed_locations,'loc');
+    $('fLocationsExtra').value='';
+    renderChecks('fSeniority',p.seniority_options||[],p.seniority_levels,'sen');
+    $('fExcluded').value=(p.excluded_keywords||[]).join(', ');
+    $('fRequired').value=(p.required_keywords||[]).join(', ');
+    $('fPreferred').value=(p.preferred_keywords||[]).join(', ');
+    $('filterSavedAt').textContent=p.updated_at?`Gespeichert: ${fmtDateTime(p.updated_at)}`:'';
+    $('filterHint').textContent=p.country_mode==='strict'
+      ? 'Strict Switzerland: nur Stellen mit belegbarem Schweiz-Bezug.'
+      : 'Achtung: ausserhalb des Strict-Modus können Jobs aus anderen Ländern erscheinen.';
+  }
+
+  function collectFilters(){
+    const p=state.profile||{};
+    const extra=splitLines($('fLocationsExtra').value);
+    return {
+      country_mode:$('fCountryMode').value,
+      allowed_countries:['Switzerland'],
+      allowed_locations:[...readChecks('loc'),...extra],
+      optional_locations:p.optional_locations||[],
+      remote_policy:{allow_remote:$('fRemote').checked,allow_hybrid:$('fHybrid').checked,allow_onsite:$('fOnsite').checked},
+      hybrid_max_office_days:Number($('fOfficeDays').value),
+      seniority_levels:readChecks('sen'),
+      include_titles:p.include_titles||[],
+      exclude_titles:p.exclude_titles||[],
+      required_keywords:splitLines($('fRequired').value),
+      preferred_keywords:splitLines($('fPreferred').value),
+      excluded_keywords:splitLines($('fExcluded').value),
+      minimum_match_score:Number($('fMinScore').value),
+      minimum_salary_chf:Number($('fMinSalary').value),
+      allow_missing_salary:$('fAllowMissingSalary').checked,
+      language_preferences:p.language_preferences||[],
+      sources_enabled:p.sources_enabled||[],
+      auto_hours:Number($('fAutoHours').value)
+    };
   }
 
   function renderScout(){
     const s=state.scoutSummary; if(!s)return;
-    $('scoutKpiNew').textContent=s.counts.new; $('scoutKpiStrong').textContent=s.counts.strong; $('scoutKpiSaved').textContent=s.counts.saved; $('scoutKpiConverted').textContent=s.counts.converted; $('scoutTabCount').textContent=s.counts.new;
-    if(s.last_run){ const r=s.last_run; $('scoutRunStatus').textContent=r.status==='ok'?'Letzte Suche erfolgreich':r.status==='partial'?'Letzte Suche teilweise erfolgreich':'Letzte Suche mit Fehlern'; $('scoutRunMeta').textContent=` ${fmtDateTime(r.finished_at||r.started_at)} · ${r.fetched_count} geprüft · ${r.matched_count} passend · ${r.new_count} neu`; const errs=r.errors||[]; $('scoutError').classList.toggle('hidden',errs.length===0); $('scoutError').innerHTML=errs.length?`<strong>Nicht alle Quellen erreichbar:</strong> ${errs.map(e=>`${esc(e.source)}: ${esc(e.error)}`).join(' · ')}`:''; }
-    else { $('scoutRunStatus').textContent='Noch keine Suche ausgeführt.'; $('scoutRunMeta').textContent=s.auto_hours?` Automatisch beim Öffnen nach ${s.auto_hours} h.`:' Automatische Suche ist aus.'; $('scoutError').classList.add('hidden'); }
-    const list=$('scoutJobList'); $('scoutEmpty').classList.toggle('hidden',state.scoutJobs.length>0);
-    list.innerHTML=state.scoutJobs.map(job=>`<article class="scout-job-card"><div class="score-ring ${scoreClass(job.match_score)}"><strong>${job.match_score}</strong><span>Match</span></div><div class="scout-job-main"><div class="scout-job-top"><div><div class="app-company"><strong>${esc(job.company||'Unbekannt')}</strong><span class="pill">${esc(job.source)}</span>${reviewPill(job)}</div><h3>${esc(job.title)}</h3></div><span class="match-label ${scoreClass(job.match_score)}">${esc(job.match_label)}</span></div><div class="app-meta">${job.location?`<span>${esc(job.location)}</span>`:''}${job.remote===true?'<span>Remote</span>':''}${job.published_at?`<span>Veröffentlicht ${fmtDate(job.published_at)}</span>`:''}${salaryText(job)?`<span>${esc(salaryText(job))}</span>`:''}</div><div class="match-reasons">${(job.match_reasons||[]).map(x=>`<span>${esc(x)}</span>`).join('')}</div>${job.excerpt?`<p class="job-excerpt">${esc(job.excerpt)}</p>`:''}<div class="matched-terms">${(job.matched_terms||[]).slice(0,7).map(x=>`<span>${esc(x)}</span>`).join('')}</div></div><div class="scout-job-actions"><a class="btn ghost" href="${esc(job.job_url)}" target="_blank" rel="noopener noreferrer">Stelle öffnen</a>${job.review_state!=='Übernommen'?`<button class="btn primary" type="button" data-convert-job="${job.id}">In Bewerbungen</button>`:`<button class="btn ghost" type="button" disabled>Übernommen</button>`}${job.review_state!=='Gemerkt'&&job.review_state!=='Übernommen'?`<button class="link-button" type="button" data-job-state="Gemerkt" data-job-id="${job.id}">Merken</button>`:''}${job.review_state!=='Ignoriert'&&job.review_state!=='Übernommen'?`<button class="link-button muted-action" type="button" data-job-state="Ignoriert" data-job-id="${job.id}">Ignorieren</button>`:''}</div></article>`).join('');
+    const run=s.last_run;
+    $('scoutKpiLastRun').textContent=run?fmtDateTime(run.finished_at||run.started_at):'—';
+    $('scoutKpiSources').textContent=run?(run.sources_scanned??0):(s.active_sources||[]).length;
+    $('scoutKpiNew').textContent=s.counts.new;
+    $('scoutKpiSaved').textContent=s.counts.saved;
+    $('scoutKpiApplied').textContent=s.counts.applied;
+    $('scoutTabCount').textContent=s.counts.new;
+    if(run){
+      $('scoutRunStatus').textContent=run.status==='ok'?'Letzte Suche erfolgreich':run.status==='partial'?'Letzte Suche teilweise erfolgreich':'Letzte Suche mit Fehlern';
+      $('scoutRunMeta').textContent=` ${fmtDateTime(run.finished_at||run.started_at)} · ${run.sources_scanned??0} Portale · ${run.fetched_count} geprüft · ${run.rejected_count??0} gefiltert · ${run.matched_count} passend · ${run.new_count} neu`;
+      const errs=run.errors||[];
+      $('scoutError').classList.toggle('hidden',errs.length===0);
+      $('scoutError').innerHTML=errs.length?`<strong>Nicht alle Quellen erreichbar:</strong> ${errs.map(e=>`${esc(e.source)}: ${esc(e.error)}`).join(' · ')}`:'';
+    } else {
+      $('scoutRunStatus').textContent='Noch keine Suche ausgeführt.';
+      $('scoutRunMeta').textContent='';
+      $('scoutError').classList.add('hidden');
+    }
+    $('scoutResultHint').textContent=`Nur Stellen, die alle harten Filter bestanden haben und mindestens ${s.minimum_match_score} Punkte erreichen.`;
+    const list=$('scoutJobList');
+    $('scoutEmpty').classList.toggle('hidden',state.scoutJobs.length>0);
+    list.innerHTML=state.scoutJobs.map(job=>`<article class="scout-job-card">
+      <div class="score-ring ${scoreClass(job.match_score)}"><strong>${job.match_score}</strong><span>MATCH</span></div>
+      <div class="scout-job-main">
+        <div class="scout-job-top">
+          <div>
+            <div class="app-company"><strong>${esc(job.company||'Unbekannt')}</strong><span class="pill">${esc(job.source)}</span>${statePill(job)}</div>
+            <h3>${esc(job.title)}</h3>
+          </div>
+          <span class="match-label ${scoreClass(job.match_score)}">${esc(job.match_label)}</span>
+        </div>
+        <div class="app-meta">${locationLine(job).map(x=>`<span>${esc(x)}</span>`).join('')}${job.published_at?`<span>Veröffentlicht ${fmtDate(job.published_at)}</span>`:''}${salaryText(job)?`<span>${esc(salaryText(job))}</span>`:''}</div>
+        <div class="match-block">
+          <div class="match-col"><strong>Starker Match</strong><ul>${(job.match_reasons||[]).map(x=>`<li>+ ${esc(x)}</li>`).join('')||'<li class="muted">—</li>'}</ul></div>
+          ${(job.match_concerns||[]).length?`<div class="match-col concerns"><strong>Mögliche Einschränkungen</strong><ul>${job.match_concerns.map(x=>`<li>− ${esc(x)}</li>`).join('')}</ul></div>`:''}
+        </div>
+        <details class="score-details"><summary>Score-Herleitung</summary><div class="score-bars">${(job.match_breakdown||[]).map(b=>`<div class="score-bar"><span>${esc(b.dimension)}</span><div><i style="width:${Math.round((b.points/b.max)*100)}%"></i></div><small>${b.points}/${b.max} · ${esc(b.detail||'')}</small></div>`).join('')}</div></details>
+      </div>
+      <div class="scout-job-actions">
+        <a class="btn ghost" href="${esc(job.job_url)}" target="_blank" rel="noopener noreferrer">OPEN JOB</a>
+        ${job.state!=='APPLIED'?`<button class="btn primary" type="button" data-convert-job="${job.id}">APPLY / In Bewerbungen</button>`:'<button class="btn ghost" type="button" disabled>Übernommen</button>'}
+        ${job.state!=='SAVED'&&job.state!=='APPLIED'?`<button class="link-button" type="button" data-job-state="SAVED" data-job-id="${job.id}">SAVE</button>`:''}
+        ${job.state!=='IGNORED'&&job.state!=='APPLIED'?`<button class="link-button muted-action" type="button" data-job-state="IGNORED" data-job-id="${job.id}">IGNORE</button>`:''}
+        ${job.state==='IGNORED'?`<button class="link-button" type="button" data-job-state="SEEN" data-job-id="${job.id}">Wieder anzeigen</button>`:''}
+      </div>
+    </article>`).join('');
+  }
+
+  function renderRejected(data){
+    const items=(data&&data.items)||[], summary=(data&&data.summary)||[];
+    $('rejectedCount').textContent=items.length;
+    $('rejectedSummary').innerHTML=summary.length
+      ? summary.map(s=>`<span class="pill">${esc(REJECT_LABEL[s.reason_code]||s.reason_code)}: ${s.count}</span>`).join('')
+      : '<span class="muted">Im letzten Lauf wurde nichts gefiltert.</span>';
+    $('rejectedList').innerHTML=items.map(item=>`<div class="rejected-row">
+      <div><strong>${esc(item.title||'—')}</strong><small>${esc(item.company||'')}${item.raw_location?` · ${esc(item.raw_location)}`:''} · ${esc(item.source)}</small></div>
+      <div class="rejected-reason"><span class="pill rejected">${esc(REJECT_LABEL[item.reason_code]||item.reason_code)}</span> ${esc(item.reason)}</div>
+    </div>`).join('');
   }
 
   async function runScout(auto=false){
-    if(state.scoutBusy)return; state.scoutBusy=true; const btn=$('runScoutBtn'); btn.disabled=true; btn.textContent='Suche läuft …'; $('scoutEmptySearch').disabled=true;
-    try { const result=await api('/api/scout/search',{method:'POST',body:'{}'}); toast(result.errors?.length?`Suche beendet: ${result.new_count} neue Treffer, eine Quelle hatte Probleme.`:`${result.new_count} neue passende Jobs gefunden.`); await Promise.all([loadScout(),loadAll()]); }
-    catch(err){ toast(`Job-Suche fehlgeschlagen: ${err.message}`); if(!auto)setView('scoutView'); }
-    finally { state.scoutBusy=false; btn.disabled=false; btn.textContent='Neue Jobs suchen'; $('scoutEmptySearch').disabled=false; }
+    if(state.scoutBusy)return;
+    state.scoutBusy=true;
+    const btn=$('runScoutBtn'); btn.disabled=true; btn.textContent='Suche läuft …'; $('scoutEmptySearch').disabled=true;
+    try {
+      const result=await api('/api/scan',{method:'POST',body:'{}'});
+      toast(`${result.new_count} neue passende Jobs · ${result.rejected_count} gefiltert · ${result.sources_scanned} Portale`);
+      await Promise.all([loadScout(),loadAll()]);
+    } catch(err){ toast(`Job-Suche fehlgeschlagen: ${err.message}`); if(!auto)setView('scoutView'); }
+    finally { state.scoutBusy=false; btn.disabled=false; btn.textContent='Jobs scannen'; $('scoutEmptySearch').disabled=false; }
   }
-
-  async function openProfile(){ const p=state.scoutProfile||await api('/api/scout/profile'); state.scoutProfile=p; $('targetRoles').value=(p.target_roles||[]).join('\n'); $('profileSkills').value=(p.skills||[]).join('\n'); $('profileLocations').value=(p.locations||[]).join('\n'); $('profileExcludes').value=(p.exclude_keywords||[]).join('\n'); $('profileMinScore').value=p.min_score??58; $('profileMinSalary').value=p.min_salary_chf??235000; $('profileAutoHours').value=p.auto_hours??12; $('profileRemote').checked=!!p.prefer_remote; $('profileHybrid').checked=!!p.allow_hybrid; $('profileEuropeRemote').checked=!!p.include_europe_remote; openModal('profileModal'); }
 
   function renderSourcesSummary(){
     const enabled=(state.sources||[]).filter(x=>x.enabled).map(x=>x.name);
@@ -117,9 +268,9 @@
     if(!state.sources.length){ list.innerHTML='<p class="muted">Noch keine Quellen eingerichtet.</p>'; return; }
     list.innerHTML=state.sources.map(src=>{
       const cfg=src.config||{};
-      const detail=src.source_type==='greenhouse'?(cfg.board_token||'') : src.source_type==='lever'?`${cfg.site||''}${cfg.region?` · ${cfg.region}`:''}` : src.source_type==='rss'?(cfg.url||'') : 'öffentliche API';
+      const detail=src.source_type==='greenhouse'?(cfg.board_token||''):src.source_type==='lever'?`${cfg.site||''}${cfg.region?` · ${cfg.region}`:''}`:src.source_type==='rss'?(cfg.url||''):'öffentliche API';
       const fixed=['arbeitnow','jobicy','remotive'].includes(src.source_type);
-      return `<div class="source-row"><div><strong>${esc(src.name)}</strong><small>${esc(sourceTypeLabel(src.source_type))}${detail?` · ${esc(detail)}`:''}</small></div><label class="switch-line"><input type="checkbox" data-source-toggle="${src.id}" ${src.enabled?'checked':''}> aktiv</label>${fixed?'':`<button type="button" class="link-button muted-action" data-source-delete="${src.id}">Löschen</button>`}</div>`;
+      return `<div class="source-row"><div><strong>${esc(src.name)}</strong><small>${esc(sourceTypeLabel(src.source_type))}${detail?` · ${esc(detail)}`:''}</small>${src.limitations?`<small class="muted">${esc(src.limitations)}</small>`:''}</div><label class="switch-line"><input type="checkbox" data-source-toggle="${src.id}" ${src.enabled?'checked':''}> aktiv</label>${fixed?'':`<button type="button" class="link-button muted-action" data-source-delete="${src.id}">Löschen</button>`}</div>`;
     }).join('');
   }
   async function openSources(){ state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); openModal('sourcesModal'); }
@@ -136,14 +287,29 @@
   // ---- Forms and listeners ----
   $('appForm').addEventListener('submit',async e=>{ e.preventDefault(); try{ const id=$('appId').value,payload=collectApp(); if(id)await api(`/api/applications/${id}`,{method:'PUT',body:JSON.stringify(payload)}); else await api('/api/applications',{method:'POST',body:JSON.stringify(payload)}); closeModal('appModal'); toast(id?'Bewerbung aktualisiert.':'Bewerbung angelegt.'); await loadAll(); }catch(err){toast(err.message);} });
   $('eventForm').addEventListener('submit',async e=>{ e.preventDefault(); try{ if(!state.selectedId)return; const payload={event_date:$('eventDate').value,event_type:$('eventType').value,person:$('eventPerson').value,note:$('eventNote').value,next_step:$('eventNextStep').value,follow_up_date:$('eventFollowUp').value}; await api(`/api/applications/${state.selectedId}/events`,{method:'POST',body:JSON.stringify(payload)}); closeModal('eventModal'); toast('Ereignis gespeichert.'); await loadAll(); await showDetail(state.selectedId); }catch(err){toast(err.message);} });
-  $('profileForm').addEventListener('submit',async e=>{ e.preventDefault(); try{ const payload={target_roles:splitLines($('targetRoles').value),skills:splitLines($('profileSkills').value),locations:splitLines($('profileLocations').value),exclude_keywords:splitLines($('profileExcludes').value),min_score:Number($('profileMinScore').value),min_salary_chf:Number($('profileMinSalary').value),auto_hours:Number($('profileAutoHours').value),prefer_remote:$('profileRemote').checked,allow_hybrid:$('profileHybrid').checked,include_europe_remote:$('profileEuropeRemote').checked,jobicy_enabled:true,arbeitnow_enabled:true}; state.scoutProfile=await api('/api/scout/profile',{method:'PUT',body:JSON.stringify(payload)}); closeModal('profileModal'); toast('Filter gespeichert und vorhandene Jobs neu bewertet.'); await loadScout(); }catch(err){toast(err.message);} });
+  $('filterPanel').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const btn=$('saveFiltersBtn'); btn.disabled=true;
+    try{
+      // PUT, then re-read from the backend so the panel shows exactly what was stored.
+      await api('/api/search-profile',{method:'PUT',body:JSON.stringify(collectFilters())});
+      await loadScout();
+      toast('Filter erfolgreich gespeichert. Der nächste Scan verwendet genau diese Werte.');
+    }catch(err){ toast(err.message); }
+    finally{ btn.disabled=false; }
+  });
+  $('resetFiltersBtn').addEventListener('click',async()=>{
+    if(!confirm('Filter auf die Standardwerte zurücksetzen?'))return;
+    try{ await api('/api/search-profile',{method:'PUT',body:JSON.stringify(state.profile.defaults||{})}); await loadScout(); toast('Filter zurückgesetzt.'); }
+    catch(err){ toast(err.message); }
+  });
 
   $('sourceForm').addEventListener('submit',async e=>{ e.preventDefault(); try{ const type=$('sourceType').value; const config={company:$('sourceCompany').value.trim()}; if(type==='greenhouse')config.board_token=$('sourceToken').value.trim(); if(type==='lever'){config.site=$('sourceToken').value.trim();config.region=$('sourceRegion').value;} if(type==='rss')config.url=$('sourceUrl').value.trim(); await api('/api/scout/sources',{method:'POST',body:JSON.stringify({name:$('sourceName').value.trim(),source_type:type,config,enabled:true})}); $('sourceForm').reset(); updateSourceFields(); state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); toast('Quelle hinzugefügt.'); }catch(err){toast(err.message);} });
   $('sourceType').addEventListener('change',updateSourceFields);
 
   $('newAppBtn').addEventListener('click',()=>{resetAppForm();openModal('appModal');}); $('emptyNewBtn').addEventListener('click',()=>{resetAppForm();openModal('appModal');}); $('editFromDetailBtn').addEventListener('click',()=>editApplication(state.selectedId)); $('newEventBtn').addEventListener('click',()=>{$('eventForm').reset();$('eventDate').value=todayIso();openModal('eventModal');});
   $('deleteAppBtn').addEventListener('click',async()=>{const id=$('appId').value;if(!id||!confirm('Diese Bewerbung inklusive Verlauf wirklich löschen?'))return;try{await api(`/api/applications/${id}`,{method:'DELETE'});closeModal('appModal');toast('Bewerbung gelöscht.');await loadAll();}catch(err){toast(err.message);}});
-  $('profileBtn').addEventListener('click',()=>openProfile().catch(err=>toast(err.message))); $('sourcesBtn').addEventListener('click',()=>openSources().catch(err=>toast(err.message))); $('runScoutBtn').addEventListener('click',()=>runScout(false)); $('scoutEmptySearch').addEventListener('click',()=>runScout(false));
+  $('sourcesBtn').addEventListener('click',()=>openSources().catch(err=>toast(err.message))); $('runScoutBtn').addEventListener('click',()=>runScout(false)); $('scoutEmptySearch').addEventListener('click',()=>runScout(false));
 
   document.addEventListener('click',async e=>{
     const close=e.target.closest('[data-close]'); if(close)closeModal(close.dataset.close);
@@ -154,15 +320,15 @@
     const delEvent=e.target.closest('[data-delete-event]'); if(delEvent&&confirm('Dieses Ereignis löschen?')){try{await api(`/api/events/${delEvent.dataset.deleteEvent}`,{method:'DELETE'});toast('Ereignis gelöscht.');await loadAll();await showDetail(state.selectedId);}catch(err){toast(err.message);}}
     const srcToggle=e.target.closest('[data-source-toggle]'); if(srcToggle){ const src=state.sources.find(x=>x.id===Number(srcToggle.dataset.sourceToggle)); if(src){ try{ await api(`/api/scout/sources/${src.id}`,{method:'PUT',body:JSON.stringify({name:src.name,source_type:src.source_type,config:src.config||{},enabled:srcToggle.checked})}); state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); }catch(err){toast(err.message);} } }
     const srcDelete=e.target.closest('[data-source-delete]'); if(srcDelete&&confirm('Diese Jobquelle wirklich löschen?')){ try{await api(`/api/scout/sources/${srcDelete.dataset.sourceDelete}`,{method:'DELETE'}); state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); toast('Quelle gelöscht.');}catch(err){toast(err.message);} }
-    const stateBtn=e.target.closest('[data-job-state]'); if(stateBtn){try{await api(`/api/scout/jobs/${stateBtn.dataset.jobId}/state`,{method:'PUT',body:JSON.stringify({state:stateBtn.dataset.jobState})});toast(stateBtn.dataset.jobState==='Gemerkt'?'Job gemerkt.':'Job ignoriert.');await Promise.all([loadScout(),loadAll()]);}catch(err){toast(err.message);}}
+    const stateBtn=e.target.closest('[data-job-state]'); if(stateBtn){try{await api(`/api/scout/jobs/${stateBtn.dataset.jobId}/state`,{method:'PUT',body:JSON.stringify({state:stateBtn.dataset.jobState})});toast(`Status: ${STATE_LABEL[stateBtn.dataset.jobState]||stateBtn.dataset.jobState}`);await Promise.all([loadScout(),loadAll()]);}catch(err){toast(err.message);}}
     const conv=e.target.closest('[data-convert-job]'); if(conv){try{const result=await api(`/api/scout/jobs/${conv.dataset.convertJob}/convert`,{method:'POST',body:'{}'});toast(result.already_exists?'Bewerbung existiert bereits.':'Job in Bewerbungen übernommen.');await Promise.all([loadScout(),loadAll()]);setView('applicationsView');await editApplication(result.application.id);}catch(err){toast(err.message);}}
   });
 
   ['searchInput','statusFilter','priorityFilter'].forEach(id=>{const el=$(id);el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(loadAll.timer);loadAll.timer=setTimeout(()=>loadAll().catch(err=>toast(err.message)),180);});});
-  ['scoutSearch','scoutStateFilter','scoutScoreFilter','scoutNewOnly'].forEach(id=>{const el=$(id);el.addEventListener(id==='scoutSearch'?'input':'change',()=>{clearTimeout(loadScout.timer);loadScout.timer=setTimeout(()=>loadScout().catch(err=>toast(err.message)),180);});});
+  ['scoutSearch','scoutStateFilter','scoutNewOnly'].forEach(id=>{const el=$(id);el.addEventListener(id==='scoutSearch'?'input':'change',()=>{clearTimeout(loadScout.timer);loadScout.timer=setTimeout(()=>loadScout().catch(err=>toast(err.message)),180);});});
 
   $('backupBtn').addEventListener('click',async()=>{try{const res=await fetch('/api/export');if(!res.ok)throw new Error('Backup konnte nicht erstellt werden.');const blob=await res.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`bewerbungs-tracker-backup-${todayIso()}.json`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);}catch(err){toast(err.message);}});
-  $('importFile').addEventListener('change',async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;if(!confirm('Import ersetzt den aktuellen Datenbestand vollständig. Fortfahren?'))return;try{const data=JSON.parse(await file.text());await api('/api/import',{method:'POST',body:JSON.stringify(data)});toast('Backup importiert.');state.scoutProfile=null;await Promise.all([loadAll(),loadScout()]);}catch(err){toast(`Import fehlgeschlagen: ${err.message}`);}});
+  $('importFile').addEventListener('change',async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;if(!confirm('Import ersetzt den aktuellen Datenbestand vollständig. Fortfahren?'))return;try{const data=JSON.parse(await file.text());await api('/api/import',{method:'POST',body:JSON.stringify(data)});toast('Backup importiert.');state.profile=null;await Promise.all([loadAll(),loadScout()]);}catch(err){toast(`Import fehlgeschlagen: ${err.message}`);}});
   document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.addEventListener('mousedown',e=>{if(e.target===backdrop)closeModal(backdrop.id);})); document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(m=>closeModal(m.id));});
 
   async function init(){

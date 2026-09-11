@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bewerbungs-Tracker Schweiz</title>
+  <title>Swiss Job Scanner + Bewerbungs-Tracker</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <header class="topbar">
       <div>
         <div class="eyebrow">JOB SEARCH CONTROL CENTER</div>
-        <h1>Bewerbungs-Tracker Schweiz</h1>
+        <h1>Swiss Job Scanner + Bewerbungs-Tracker</h1>
         <p class="subtitle">Head · Director · Principal · Technical Leadership</p>
       </div>
       <div class="top-actions">
@@ -74,47 +74,133 @@
       <section id="scoutView" class="app-view hidden">
         <div class="scout-hero">
           <div>
-            <div class="eyebrow">AUTOMATISCHE JOB-SUCHE</div>
+            <div class="eyebrow">LOKALE SCHWEIZER JOB-SUCHE</div>
             <h2>Job Scout</h2>
-            <p>Findet aktuelle Rollen, bewertet sie gegen dein Leadership- und Tech-Profil und merkt sich, was du schon gesehen hast.</p>
+            <p>Portale werden abgefragt, die Treffer aber <strong>lokal</strong> gefiltert: erst harte Filter (Geografie, Arbeitsmodell, Ausschlüsse), dann ein erklärbarer Match-Score.</p>
           </div>
           <div class="scout-actions">
             <button class="btn ghost" id="sourcesBtn">Portale</button>
-            <button class="btn ghost" id="profileBtn">Filter</button>
             <button class="btn primary" id="runScoutBtn">Jobs scannen</button>
           </div>
         </div>
 
-        <section class="scout-kpis" aria-label="Job-Scout-Kennzahlen">
-          <article><span>Neu seit letztem Lauf</span><strong id="scoutKpiNew">0</strong></article>
-          <article><span>Starke Matches ≥ 70</span><strong id="scoutKpiStrong">0</strong></article>
-          <article><span>Gemerkt</span><strong id="scoutKpiSaved">0</strong></article>
-          <article><span>Übernommen</span><strong id="scoutKpiConverted">0</strong></article>
-        </section>
-
         <div class="scout-statusbar">
-          <div><strong id="scoutRunStatus">Noch keine Suche ausgeführt.</strong><span id="scoutRunMeta" class="muted"></span></div>
+          <div>
+            <strong id="scoutRunStatus">Noch keine Suche ausgeführt.</strong>
+            <span id="scoutRunMeta" class="muted"></span>
+          </div>
           <div class="source-note">Aktive Portale: <strong id="activeSourcesText">wird geladen …</strong></div>
         </div>
+
+        <section class="scout-kpis" aria-label="Job-Scout-Kennzahlen">
+          <article><span>Letzter Scan</span><strong id="scoutKpiLastRun">—</strong></article>
+          <article><span>Portale gescannt</span><strong id="scoutKpiSources">0</strong></article>
+          <article><span>Neue passende Jobs</span><strong id="scoutKpiNew">0</strong></article>
+          <article><span>Gemerkt</span><strong id="scoutKpiSaved">0</strong></article>
+          <article><span>Übernommen</span><strong id="scoutKpiApplied">0</strong></article>
+        </section>
+
         <div id="scoutError" class="provider-error hidden"></div>
+
+        <form id="filterPanel" class="filter-panel" aria-label="Suchfilter">
+          <div class="filter-panel-head">
+            <div><h3>Suchfilter</h3><p class="muted">Wird in SQLite gespeichert und genau so vom nächsten Scan verwendet.</p></div>
+            <span id="filterSavedAt" class="muted"></span>
+          </div>
+          <div class="filter-grid">
+            <label>Land
+              <select id="fCountry">
+                <option value="Switzerland">Schweiz</option>
+              </select>
+            </label>
+            <label>Modus
+              <select id="fCountryMode">
+                <option value="strict">Strict Switzerland</option>
+                <option value="preferred">Bevorzugt (Land muss erlaubt sein)</option>
+                <option value="off">Aus (keine Geo-Filterung)</option>
+              </select>
+            </label>
+            <label>Minimum Match
+              <input id="fMinScore" type="number" min="0" max="100" step="1">
+            </label>
+            <label>Max. Bürotage / Woche
+              <input id="fOfficeDays" type="number" min="0" max="5" step="1">
+            </label>
+
+            <fieldset class="filter-block span-2">
+              <legend>Standorte (Priorität)</legend>
+              <div id="fLocations" class="chip-checks"></div>
+              <input id="fLocationsExtra" placeholder="Weitere Orte, kommasepariert (z. B. Winterthur, Baar)">
+            </fieldset>
+
+            <fieldset class="filter-block">
+              <legend>Arbeitsmodell</legend>
+              <label class="form-check"><input type="checkbox" id="fRemote"> Remote</label>
+              <label class="form-check"><input type="checkbox" id="fHybrid"> Hybrid</label>
+              <label class="form-check"><input type="checkbox" id="fOnsite"> Onsite</label>
+            </fieldset>
+
+            <fieldset class="filter-block">
+              <legend>Seniorität</legend>
+              <div id="fSeniority" class="chip-checks"></div>
+            </fieldset>
+
+            <label class="span-2">Ausschlussbegriffe <small>Titel mit diesen Begriffen werden hart gefiltert</small>
+              <textarea id="fExcluded" rows="3"></textarea>
+            </label>
+            <label>Pflicht-Keywords <small>müssen alle vorkommen, leer = aus</small>
+              <textarea id="fRequired" rows="3"></textarea>
+            </label>
+            <label>Profil-Keywords <small>fliessen in den Score ein</small>
+              <textarea id="fPreferred" rows="3"></textarea>
+            </label>
+            <label>Gehalts-Untergrenze CHF <small>0 = nicht prüfen</small>
+              <input id="fMinSalary" type="number" min="0" step="5000">
+            </label>
+            <label>Auto-Suche <small>Stunden seit letztem Scan, 0 = aus</small>
+              <input id="fAutoHours" type="number" min="0" max="168" step="1">
+            </label>
+            <div class="check-stack">
+              <label class="form-check"><input type="checkbox" id="fAllowMissingSalary"> Jobs ohne Gehaltsangabe zulassen</label>
+            </div>
+          </div>
+          <div class="filter-actions">
+            <span id="filterHint" class="muted"></span>
+            <div class="spacer"></div>
+            <button type="button" class="btn ghost" id="resetFiltersBtn">Zurücksetzen</button>
+            <button type="submit" class="btn primary" id="saveFiltersBtn">SAVE FILTERS</button>
+          </div>
+        </form>
 
         <section class="main-panel scout-panel">
           <div class="section-head">
-            <div><h2>Passende Stellen</h2><p>Score ist eine Vorauswahl, keine Orakelmaschine. Ab 70 lohnt sich ein genauer Blick.</p></div>
+            <div><h2>Passende Stellen</h2><p id="scoutResultHint">Nur Jobs, die alle harten Filter bestanden haben.</p></div>
             <div class="filters scout-filters">
               <input id="scoutSearch" type="search" placeholder="Firma, Titel, Skill …" aria-label="Scout durchsuchen">
-              <select id="scoutStateFilter"><option value="">Aktive Treffer</option><option value="Neu">Neu</option><option value="Gemerkt">Gemerkt</option><option value="Übernommen">Übernommen</option><option value="Ignoriert">Ignoriert</option></select>
-              <select id="scoutScoreFilter"><option value="58">Score ≥ 58</option><option value="70">Score ≥ 70</option><option value="82">Score ≥ 82</option><option value="0">Alle Scores</option></select>
+              <select id="scoutStateFilter">
+                <option value="">Aktive Treffer</option>
+                <option value="NEW">Neu</option>
+                <option value="SEEN">Gesehen</option>
+                <option value="SAVED">Gemerkt</option>
+                <option value="APPLIED">Übernommen</option>
+                <option value="IGNORED">Ignoriert</option>
+              </select>
               <label class="compact-check"><input type="checkbox" id="scoutNewOnly"> Nur neue</label>
             </div>
           </div>
           <div id="scoutJobList" class="scout-job-list"></div>
           <div id="scoutEmpty" class="empty-state">
             <div class="empty-icon">⌕</div><h3>Noch keine Job-Treffer</h3>
-            <p>Starte die Suche. Die App merkt sich neue Treffer und zeigt beim nächsten Lauf nur wirklich neue Rollen als neu an.</p>
+            <p>Filter prüfen, dann „Jobs scannen“. Wenn nichts übrig bleibt, zeigt der Bereich „Warum Jobs gefiltert wurden“ den Grund.</p>
             <button class="btn primary" type="button" id="scoutEmptySearch">Jetzt suchen</button>
           </div>
         </section>
+
+        <details id="rejectedPanel" class="rejected-panel">
+          <summary>Warum Jobs gefiltert wurden <span id="rejectedCount" class="pill">0</span></summary>
+          <div id="rejectedSummary" class="rejected-summary"></div>
+          <div id="rejectedList" class="rejected-list"></div>
+        </details>
       </section>
     </main>
   </div>
@@ -168,30 +254,6 @@
         <label>Datum<input id="eventDate" type="date" required></label><label>Ereignis<select id="eventType"><option>Bewerbung versendet</option><option>Eingangsbestätigung</option><option>E-Mail</option><option>Telefonat</option><option>HR-Screening</option><option>Interview</option><option>Case / Assessment</option><option>Follow-up</option><option>Angebot</option><option>Absage</option><option>Sonstiges</option></select></label>
         <label class="span-2">Von / Mit wem<input id="eventPerson" placeholder="Name, Recruiter, Hiring Manager …"></label><label class="span-2">Kurznotiz / Ergebnis<textarea id="eventNote" rows="4"></textarea></label><label class="span-2">Nächster Schritt<input id="eventNextStep"></label><label>Follow-up am<input id="eventFollowUp" type="date"></label>
       </div><div class="form-actions"><div class="spacer"></div><button type="button" class="btn ghost" data-close="eventModal">Abbrechen</button><button type="submit" class="btn primary">Ereignis speichern</button></div></form>
-    </div>
-  </div>
-
-  <div class="modal-backdrop hidden" id="profileModal" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
-    <div class="modal large">
-      <div class="modal-head"><div><div class="eyebrow">MATCHING-PROFIL</div><h2 id="profileTitle">Job-Scout Suchprofil</h2><p class="muted">Voreingestellt auf dein Head-/Director-/Principal-Profil. Du kannst alles anpassen.</p></div><button class="icon-btn" data-close="profileModal" aria-label="Schliessen">×</button></div>
-      <form id="profileForm">
-        <div class="form-grid profile-grid">
-          <label class="span-2">Zielrollen <small>eine pro Zeile oder kommasepariert</small><textarea id="targetRoles" rows="6"></textarea></label>
-          <label class="span-2">Skills / Themen für das Matching<textarea id="profileSkills" rows="5"></textarea></label>
-          <label>Bevorzugte Standorte<textarea id="profileLocations" rows="5"></textarea></label>
-          <label>Ausschlussbegriffe<textarea id="profileExcludes" rows="5"></textarea></label>
-          <label>Minimaler Match-Score<input id="profileMinScore" type="number" min="0" max="100"></label>
-          <label>Gehalts-Untergrenze CHF <small>nur gewertet, wenn angegeben</small><input id="profileMinSalary" type="number" min="0" step="5000"></label>
-          <label>Auto-Suche beim Öffnen<input id="profileAutoHours" type="number" min="0" max="168" step="1"><small>Stunden seit letzter Suche, 0 = aus</small></label>
-          <div class="check-stack">
-            <label class="form-check"><input id="profileRemote" type="checkbox"> Remote bevorzugen</label>
-            <label class="form-check"><input id="profileHybrid" type="checkbox"> Hybrid akzeptieren</label>
-            <label class="form-check"><input id="profileEuropeRemote" type="checkbox"> Remote Europa / EMEA einbeziehen</label>
-          </div>
-          <div class="provider-box span-2"><strong>Portale separat verwalten</strong><small>Unter „Portale“ aktivierst du allgemeine Jobquellen oder fügst konkrete Greenhouse-/Lever-Karriereseiten und RSS-Feeds hinzu.</small></div>
-        </div>
-        <div class="form-actions"><div class="spacer"></div><button type="button" class="btn ghost" data-close="profileModal">Abbrechen</button><button type="submit" class="btn primary">Profil speichern</button></div>
-      </form>
     </div>
   </div>
 

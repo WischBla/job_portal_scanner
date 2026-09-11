@@ -1,0 +1,268 @@
+"""MatchScorer - an explainable 0-100 relevance score.
+
+Weights (sum = 100):
+
+    seniority               20
+    role / responsibility   25
+    technical domain        20
+    leadership / transform. 15
+    location / work model   10
+    salary evidence          5
+    strategic / AI relevance  5
+
+Every dimension returns its own points, a short reason and - where relevant -
+a concern, so the UI can always answer "why 84?".  Scoring never decides
+whether a job is shown from a geography point of view; the HardFilter already
+did that.
+"""
+
+import re
+
+from .locations import fold
+
+WEIGHTS = {
+    'seniority': 20,
+    'role': 25,
+    'technical': 20,
+    'leadership': 15,
+    'location': 10,
+    'salary': 5,
+    'strategic': 5,
+}
+
+# Seniority tiers relative to the profile's selected levels.
+TIER = {
+    'VP': 3, 'Senior Director': 3, 'Head of': 3, 'Director': 3, 'Principal': 3,
+    'Global Lead': 2, 'Senior Lead': 2, 'Senior Manager': 2, 'Lead': 2,
+    'Manager': 1, 'Other': 0,
+}
+
+TECHNICAL_TERMS = [
+    'aws', 'azure', 'gcp', 'google cloud', 'cloud', 'kubernetes', 'k8s', 'docker',
+    'terraform', 'ansible', 'sre', 'site reliability', 'devops', 'devsecops',
+    'ci/cd', 'cicd', 'continuous delivery', 'observability', 'monitoring', 'prometheus',
+    'grafana', 'slo', 'sli', 'sla', 'incident management', 'on-call', 'platform engineering',
+    'infrastructure', 'linux', 'networking', 'microservices', 'api', 'automation',
+    'security', 'application security', 'appsec', 'zero trust', 'iam', 'data platform',
+    'reliability', 'capacity', 'performance engineering', 'architecture',
+]
+LEADERSHIP_TERMS = [
+    'leadership', 'lead a team', 'line management', 'people management', 'hiring',
+    'mentoring', 'coaching', 'stakeholder', 'cross-functional', 'cross functional',
+    'transformation', 'change management', 'strategy', 'roadmap', 'budget', 'p&l',
+    'governance', 'operating model', 'organisational', 'organizational', 'vision',
+    'executive', 'c-level', 'steering', 'portfolio', 'program management',
+    'operational excellence', 'continuous improvement',
+]
+STRATEGIC_TERMS = [
+    'ai', 'artificial intelligence', 'aiops', 'agentic', 'machine learning', 'llm',
+    'genai', 'generative ai', 'mlops', 'data-driven', 'innovation', 'digital transformation',
+    'automation', 'modernisation', 'modernization',
+]
+PEOPLE_LEADERSHIP_TERMS = ['direct reports', 'line management', 'people management',
+                           'lead a team', 'manage a team', 'team of', 'hiring', 'performance reviews']
+
+LABELS = [(85, 'Sehr starker Match'), (70, 'Starker Match'), (55, 'Prüfen'), (0, 'Randtreffer')]
+
+
+def _hits(text, terms):
+    """Whole-token matches, de-duplicated case-insensitively."""
+    found, seen = [], set()
+    for term in terms:
+        needle = fold(term)
+        if not needle or needle in seen:
+            continue
+        if re.search(r'(?<![a-z0-9])' + re.escape(needle) + r'(?![a-z0-9])', text):
+            seen.add(needle)
+            found.append(term)
+    return found
+
+
+class MatchScorer:
+    def score(self, job, profile):
+        title = fold(job.get('title'))
+        description = fold(job.get('description') or job.get('excerpt') or '')[:20000]
+        blob = '{0} {1}'.format(title, description)
+
+        parts = [
+            self._seniority(job, profile, title),
+            self._role(job, profile, title, description),
+            self._technical(job, profile, title, description),
+            self._leadership(job, profile, blob),
+            self._location(job, profile),
+            self._salary(job, profile),
+            self._strategic(job, profile, blob),
+        ]
+
+        total = sum(p['points'] for p in parts)
+        total = max(0, min(100, int(round(total))))
+        reasons = [r for p in parts for r in p['reasons']]
+        concerns = [c for p in parts for c in p['concerns']]
+        terms = []
+        for p in parts:
+            for term in p.get('terms', []):
+                if term.casefold() not in {t.casefold() for t in terms}:
+                    terms.append(term)
+
+        label = next(name for threshold, name in LABELS if total >= threshold)
+        breakdown = [{'dimension': p['dimension'], 'points': round(p['points'], 1),
+                      'max': p['max'], 'detail': p['detail']} for p in parts]
+        return {
+            'score': total,
+            'label': label,
+            'reasons': reasons,
+            'concerns': concerns,
+            'terms': terms[:12],
+            'breakdown': breakdown,
+        }
+
+    # -- dimensions --------------------------------------------------------
+    def _part(self, dimension, points, detail, reasons=(), concerns=(), terms=()):
+        return {'dimension': dimension, 'points': points, 'max': WEIGHTS[dimension],
+                'detail': detail, 'reasons': list(reasons), 'concerns': list(concerns),
+                'terms': list(terms)}
+
+    def _seniority(self, job, profile, title):
+        maximum = WEIGHTS['seniority']
+        detected = job.get('seniority') or 'Other'
+        wanted = {fold(x) for x in (profile.get('seniority_levels') or [])}
+        if fold(detected) in wanted:
+            return self._part('seniority', maximum, detected,
+                              reasons=['{0} level'.format(detected)])
+        own, best = TIER.get(detected, 0), max((TIER.get(x, 0) for x in
+                                                (profile.get('seniority_levels') or [])), default=3)
+        if own >= best:
+            return self._part('seniority', maximum * 0.8, detected,
+                              reasons=['{0} level (equivalent seniority)'.format(detected)])
+        if own == best - 1:
+            return self._part('seniority', maximum * 0.5, detected,
+                              reasons=['{0} level'.format(detected)],
+                              concerns=['seniority one step below the target levels'])
+        return self._part('seniority', maximum * 0.15, detected,
+                          concerns=['title does not signal a Head / Director / Principal / Lead scope'])
+
+    def _role(self, job, profile, title, description):
+        maximum = WEIGHTS['role']
+        areas = profile.get('include_titles') or []
+        title_hits = _hits(title, areas)
+        body_hits = [a for a in _hits(description, areas) if a not in title_hits]
+        # A title hit is worth far more than a mention buried in the text.
+        points = 0.0
+        if title_hits:
+            points = 15 + (len(title_hits) - 1) * 5
+        points = min(maximum, points + len(body_hits) * 1.5)
+        reasons, concerns = [], []
+        if title_hits:
+            reasons.append('Role area in title: {0}'.format(', '.join(title_hits[:3])))
+        elif body_hits:
+            reasons.append('Role area in description: {0}'.format(', '.join(body_hits[:3])))
+        else:
+            concerns.append('no target responsibility area found in title or description')
+        # Generic technical-leadership titles still deserve partial credit.
+        if not title_hits:
+            generic = _hits(title, ['engineering', 'technology', 'technical', 'operations',
+                                    'platform', 'infrastructure', 'cloud', 'reliability',
+                                    'program', 'transformation', 'enablement', 'productivity'])
+            if generic:
+                points = max(points, min(maximum * 0.6, 4 + len(generic) * 4))
+                reasons.append('Adjacent technical leadership title ({0})'.format(', '.join(generic[:3])))
+        detail = '{0} title hit(s), {1} description hit(s)'.format(len(title_hits), len(body_hits))
+        return self._part('role', points, detail, reasons, concerns, title_hits[:4] + body_hits[:3])
+
+    def _technical(self, job, profile, title, description):
+        maximum = WEIGHTS['technical']
+        terms = list(dict.fromkeys(list(profile.get('preferred_keywords') or []) + TECHNICAL_TERMS))
+        title_hits = _hits(title, terms)
+        body_hits = [t for t in _hits(description, terms) if t not in title_hits]
+        points = min(maximum, len(title_hits) * 5 + len(body_hits) * 1.6)
+        reasons, concerns = [], []
+        shown = (title_hits + body_hits)[:4]
+        if shown:
+            reasons.append('Technology match: {0}'.format(', '.join(shown)))
+        else:
+            concerns.append('no technology keywords from your profile found')
+        detail = '{0} technology keyword(s)'.format(len(title_hits) + len(body_hits))
+        return self._part('technical', points, detail, reasons, concerns, shown)
+
+    def _leadership(self, job, profile, blob):
+        maximum = WEIGHTS['leadership']
+        hits = _hits(blob, LEADERSHIP_TERMS)
+        points = min(maximum, 4 + len(hits) * 2.2) if hits else 0.0
+        reasons, concerns = [], []
+        if hits:
+            reasons.append('Leadership / transformation scope: {0}'.format(', '.join(hits[:3])))
+        else:
+            concerns.append('no leadership or transformation responsibilities described')
+        if not _hits(blob, PEOPLE_LEADERSHIP_TERMS):
+            concerns.append('people leadership scope unclear')
+        return self._part('leadership', points, '{0} leadership signal(s)'.format(len(hits)),
+                          reasons, concerns, hits[:3])
+
+    def _location(self, job, profile):
+        maximum = WEIGHTS['location']
+        preferred = {fold(x) for x in (profile.get('allowed_locations') or [])}
+        optional = {fold(x) for x in (profile.get('optional_locations') or [])}
+        city = fold(job.get('normalized_city') or '')
+        model = job.get('work_model') or 'Unknown'
+        reasons, concerns = [], []
+        points = maximum * 0.4
+
+        if city and city in preferred:
+            points = maximum
+            reasons.append(job.get('normalized_city'))
+        elif city and city in optional:
+            points = maximum * 0.8
+            reasons.append('{0} (secondary location)'.format(job.get('normalized_city')))
+        elif job.get('switzerland_eligible'):
+            points = maximum * 0.7
+            reasons.append(job.get('normalized_city') or 'Switzerland')
+        if job.get('location_confidence') == 'medium':
+            points *= 0.8
+            concerns.append('Swiss eligibility comes from the description, not from structured data')
+
+        if model == 'Remote':
+            reasons.append('Remote')
+        elif model == 'Hybrid':
+            days = job.get('office_days')
+            limit = int(profile.get('hybrid_max_office_days') or 2)
+            if days is not None and days > limit:
+                points *= 0.7
+                concerns.append('{0} office days per week exceeds your maximum of {1}'.format(days, limit))
+                reasons.append('Hybrid')
+            else:
+                reasons.append('Hybrid' + (' ({0} office days)'.format(days) if days else ''))
+        elif model == 'Onsite':
+            points *= 0.85
+            reasons.append('Onsite')
+        detail = '{0}, {1}'.format(job.get('normalized_city') or job.get('normalized_country')
+                                   or job.get('raw_location') or 'unknown', model)
+        return self._part('location', points, detail, reasons, concerns)
+
+    def _salary(self, job, profile):
+        maximum = WEIGHTS['salary']
+        low, high = job.get('salary_min'), job.get('salary_max')
+        currency = (job.get('salary_currency') or '').upper()
+        minimum = int(profile.get('minimum_salary_chf') or 0)
+        if low is None and high is None:
+            return self._part('salary', maximum * 0.4, 'no salary published',
+                              concerns=['no published salary'])
+        top = high if high is not None else low
+        bottom = low if low is not None else high
+        text = '{0}{1}'.format(int(top or 0), ' ' + currency if currency else '')
+        if minimum and currency == 'CHF':
+            if bottom is not None and bottom >= minimum:
+                return self._part('salary', maximum, text,
+                                  reasons=['Published salary reaches your target range'])
+            if top is not None and top < minimum:
+                return self._part('salary', 0, text,
+                                  concerns=['published salary is below your target range'])
+        return self._part('salary', maximum * 0.7, text, reasons=['Salary published'])
+
+    def _strategic(self, job, profile, blob):
+        maximum = WEIGHTS['strategic']
+        hits = _hits(blob, STRATEGIC_TERMS)
+        points = min(maximum, len(hits) * 2.0)
+        reasons = ['AI / automation relevance: {0}'.format(', '.join(hits[:3]))] if hits else []
+        concerns = [] if hits else ['no AI / automation angle mentioned']
+        return self._part('strategic', points, '{0} strategic signal(s)'.format(len(hits)),
+                          reasons, concerns, hits[:3])
