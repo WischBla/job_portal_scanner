@@ -2,7 +2,7 @@
   const STATUS = ['Vorbereitung','Beworben','Eingangsbestätigung','Screening / HR','Interview 1','Interview 2','Case / Assessment','Final Interview','Angebot','On Hold','Abgelehnt','Zurückgezogen'];
   // The search profile is NEVER cached here. The backend row is the only source
   // of truth; every render re-reads it so UI and scanner cannot drift apart.
-  const state = { applications: [], dashboard: null, selectedId: null, scoutJobs: [], scoutSummary: null, profile: null, sources: [], scoutBusy: false };
+  const state = { applications: [], dashboard: null, selectedId: null, scoutJobs: [], scoutSummary: null, profile: null, sources: [], watchlist: [], scoutBusy: false };
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const fmtDate = iso => {
@@ -93,7 +93,19 @@
     const range=job.salary_min!=null&&job.salary_max!=null?`${fmt(job.salary_min)}–${fmt(job.salary_max)}`:fmt(job.salary_min??job.salary_max);
     return `${range}${job.salary_currency?' '+job.salary_currency:''}${job.salary_period?' / '+job.salary_period:''}`;
   }
-  function scoreClass(score){ return score>=85?'excellent':score>=70?'strong':score>=55?'review':'weak'; }
+  const EXCELLENT_FROM=80, STRONG_FROM=70;
+  function scoreClass(score){ return score>=EXCELLENT_FROM?'excellent':score>=STRONG_FROM?'strong':'review'; }
+  function scoreBand(score){ return score>=EXCELLENT_FROM?'EXCELLENT':score>=STRONG_FROM?'STRONG':'WORTH REVIEWING'; }
+  function postedAgo(iso){
+    if(!iso) return '';
+    const d=new Date(iso); if(Number.isNaN(d.getTime())) return '';
+    const days=Math.floor((Date.now()-d.getTime())/86400000);
+    if(days<0) return fmtDate(iso);
+    if(days===0) return 'Posted today';
+    if(days===1) return 'Posted 1 day ago';
+    if(days<45) return `Posted ${days} days ago`;
+    return `Posted ${fmtDate(iso)}`;
+  }
   function statePill(job){
     if(job.state==='SAVED') return '<span class="pill saved">Gemerkt</span>';
     if(job.state==='APPLIED') return '<span class="pill offer">In Bewerbungen</span>';
@@ -116,13 +128,14 @@
     const s=$('scoutSearch').value.trim(), st=$('scoutStateFilter').value;
     if(s)params.set('search',s); if(st)params.set('state',st);
     if($('scoutNewOnly').checked)params.set('new_only','1');
+    if($('scoutSort').value)params.set('sort',$('scoutSort').value);
     // Always re-read the profile from the backend - no local copy.
     const [jobs,summary,profile,sources,rejected]=await Promise.all([
       api(`/api/scout/jobs?${params}`), api('/api/scout/summary'), api('/api/search-profile'),
       api('/api/scout/sources'), api('/api/scout/rejected?limit=250')
     ]);
     state.scoutJobs=jobs; state.scoutSummary=summary; state.profile=profile; state.sources=sources; state.rejected=rejected;
-    renderFilterPanel(profile); renderScout(); renderRejected(rejected); renderSourcesSummary();
+    renderProfileCard(profile); renderFilterPanel(profile); renderScout(); renderRejected(rejected); renderSourcesSummary();
   }
 
   // ---- Filter panel (backend-backed) ----
@@ -135,25 +148,53 @@
     return Array.from(document.querySelectorAll(`input[data-group="${name}"]:checked`)).map(el=>el.value);
   }
 
+  const SALARY_HINT={ignore:'Ignore salary',ranking:'Ranking signal only',hard:'Hard minimum'};
+
+  function renderProfileCard(p){
+    const rec=p.recommended_preset||null, active=!!p.is_recommended_active, sum=p.summary||{};
+    $('profileName').textContent = active&&rec ? rec.name : (p.preset_key&&rec&&p.preset_key===rec.key ? rec.name : 'Custom search profile');
+    $('profileDescription').textContent = active&&rec ? (rec.description||'') : 'Manually configured filters.';
+    $('profileBadge').classList.toggle('hidden',!active);
+    $('sumCountry').textContent = `${sum.country||'Switzerland'}${(p.country_mode==='strict')?' · Strict Switzerland':''}`;
+    $('sumWorkModel').textContent = sum.work_model||'—';
+    $('sumLevel').textContent = sum.target_level||'—';
+    $('sumMinScore').textContent = sum.minimum_match_score ?? '—';
+    $('sumSalary').textContent = SALARY_HINT[p.salary_mode]||sum.salary||'—';
+    $('applyRecommendedBtn').classList.toggle('hidden', active || !rec);
+    $('restoreRecommendedBtn').classList.toggle('hidden', !rec);
+    $('profileStateHint').textContent = active
+      ? 'This is the recommended profile. Editing any filter turns it into your own profile — the preset itself is never overwritten.'
+      : (rec ? `Your own settings are active and are kept. "${rec.name}" is available as the recommended profile.` : '');
+    $('filterSavedAt').textContent=p.updated_at?`Gespeichert: ${fmtDateTime(p.updated_at)}`:'';
+    // The saved default only seeds the control once; after that the visible
+    // choice belongs to the user for the rest of the session.
+    if(!renderProfileCard.sortSeeded){ $('scoutSort').value=p.sort_mode||'score'; renderProfileCard.sortSeeded=true; }
+  }
+
   function renderFilterPanel(p){
     $('fCountryMode').value=p.country_mode||'strict';
     $('fMinScore').value=p.minimum_match_score??65;
     $('fOfficeDays').value=p.hybrid_max_office_days??2;
     $('fMinSalary').value=p.minimum_salary_chf??0;
+    $('fTargetSalary').value=p.salary_target_chf??0;
+    $('fFloorSalary').value=p.salary_floor_chf??0;
     $('fAutoHours').value=p.auto_hours??12;
     $('fAllowMissingSalary').checked=!!p.allow_missing_salary;
+    $('fLocationMode').value=p.location_filter_mode||'hard';
+    $('fSortMode').value=p.sort_mode||'score';
+    document.querySelectorAll('input[name="salaryMode"]').forEach(el=>{el.checked=el.value===(p.salary_mode||'hard');});
     const rp=p.remote_policy||{};
     $('fRemote').checked=rp.allow_remote!==false;
     $('fHybrid').checked=rp.allow_hybrid!==false;
     $('fOnsite').checked=rp.allow_onsite!==false;
-    const locOptions=Array.from(new Set([...(p.allowed_locations||[]),...(p.optional_locations||[]),...BASE_LOCATIONS]));
+    const locOptions=Array.from(new Set([...(p.allowed_locations||[]),...(p.optional_locations||[]),...(p.tertiary_locations||[]),...BASE_LOCATIONS]));
     renderChecks('fLocations',locOptions,p.allowed_locations,'loc');
     $('fLocationsExtra').value='';
     renderChecks('fSeniority',p.seniority_options||[],p.seniority_levels,'sen');
     $('fExcluded').value=(p.excluded_keywords||[]).join(', ');
     $('fRequired').value=(p.required_keywords||[]).join(', ');
     $('fPreferred').value=(p.preferred_keywords||[]).join(', ');
-    $('filterSavedAt').textContent=p.updated_at?`Gespeichert: ${fmtDateTime(p.updated_at)}`:'';
+    $('fSecondaryTitles').value=(p.secondary_titles||[]).join(', ');
     $('filterHint').textContent=p.country_mode==='strict'
       ? 'Strict Switzerland: nur Stellen mit belegbarem Schweiz-Bezug.'
       : 'Achtung: ausserhalb des Strict-Modus können Jobs aus anderen Ländern erscheinen.';
@@ -167,9 +208,12 @@
       allowed_countries:['Switzerland'],
       allowed_locations:[...readChecks('loc'),...extra],
       optional_locations:p.optional_locations||[],
+      tertiary_locations:p.tertiary_locations||[],
+      location_filter_mode:$('fLocationMode').value,
       remote_policy:{allow_remote:$('fRemote').checked,allow_hybrid:$('fHybrid').checked,allow_onsite:$('fOnsite').checked},
       hybrid_max_office_days:Number($('fOfficeDays').value),
       seniority_levels:readChecks('sen'),
+      secondary_titles:splitLines($('fSecondaryTitles').value),
       include_titles:p.include_titles||[],
       exclude_titles:p.exclude_titles||[],
       required_keywords:splitLines($('fRequired').value),
@@ -177,10 +221,16 @@
       excluded_keywords:splitLines($('fExcluded').value),
       minimum_match_score:Number($('fMinScore').value),
       minimum_salary_chf:Number($('fMinSalary').value),
+      salary_target_chf:Number($('fTargetSalary').value),
+      salary_floor_chf:Number($('fFloorSalary').value),
+      salary_mode:(document.querySelector('input[name="salaryMode"]:checked')||{}).value||'ranking',
       allow_missing_salary:$('fAllowMissingSalary').checked,
       language_preferences:p.language_preferences||[],
       sources_enabled:p.sources_enabled||[],
+      sort_mode:$('fSortMode').value,
       auto_hours:Number($('fAutoHours').value)
+      // preset_key is deliberately NOT sent: any manual save makes this the
+      // user's own profile, and the stored preset stays untouched.
     };
   }
 
@@ -204,39 +254,51 @@
       $('scoutRunMeta').textContent='';
       $('scoutError').classList.add('hidden');
     }
+    const f=s.funnel||{};
+    $('funFetched').textContent=f.fetched??0;
+    $('funSwiss').textContent=f.swiss_eligible??0;
+    $('funRelevant').textContent=f.relevant??0;
+    $('funStrong').textContent=f.strong??0;
+    $('funExcellent').textContent=f.excellent??0;
+    $('funRelevantLabel').textContent=`Relevant ≥ ${f.minimum_match_score??s.minimum_match_score}`;
+    $('funStrongLabel').textContent=`Strong ≥ ${f.strong_from??STRONG_FROM}`;
+    $('funExcellentLabel').textContent=`Excellent ≥ ${f.excellent_from??EXCELLENT_FROM}`;
     $('scoutResultHint').textContent=`Nur Stellen, die alle harten Filter bestanden haben und mindestens ${s.minimum_match_score} Punkte erreichen.`;
     const list=$('scoutJobList');
     $('scoutEmpty').classList.toggle('hidden',state.scoutJobs.length>0);
     list.innerHTML=state.scoutJobs.map(job=>`<article class="scout-job-card">
-      <div class="score-ring ${scoreClass(job.match_score)}"><strong>${job.match_score}</strong><span>MATCH</span></div>
+      <div class="score-ring ${scoreClass(job.match_score)}"><strong>${job.match_score}</strong><span>MATCH</span><em>${scoreBand(job.match_score)}</em></div>
       <div class="scout-job-main">
         <div class="scout-job-top">
           <div>
-            <div class="app-company"><strong>${esc(job.company||'Unbekannt')}</strong><span class="pill">${esc(job.source)}</span>${statePill(job)}</div>
             <h3>${esc(job.title)}</h3>
+            <div class="app-company"><strong>${esc(job.company||'Unbekannt')}</strong><span class="pill">${esc(job.source)}</span>${statePill(job)}</div>
           </div>
           <span class="match-label ${scoreClass(job.match_score)}">${esc(job.match_label)}</span>
         </div>
-        <div class="app-meta">${locationLine(job).map(x=>`<span>${esc(x)}</span>`).join('')}${job.published_at?`<span>Veröffentlicht ${fmtDate(job.published_at)}</span>`:''}${salaryText(job)?`<span>${esc(salaryText(job))}</span>`:''}</div>
+        <div class="app-meta">${locationLine(job).map(x=>`<span>${esc(x)}</span>`).join('')}${postedAgo(job.published_at)?`<span>${esc(postedAgo(job.published_at))}</span>`:''}${salaryText(job)?`<span>${esc(salaryText(job))}</span>`:''}</div>
         <div class="match-block">
-          <div class="match-col"><strong>Starker Match</strong><ul>${(job.match_reasons||[]).map(x=>`<li>+ ${esc(x)}</li>`).join('')||'<li class="muted">—</li>'}</ul></div>
-          ${(job.match_concerns||[]).length?`<div class="match-col concerns"><strong>Mögliche Einschränkungen</strong><ul>${job.match_concerns.map(x=>`<li>− ${esc(x)}</li>`).join('')}</ul></div>`:''}
+          <div class="match-col"><strong>Why this matches</strong><ul>${(job.match_reasons||[]).map(x=>`<li>+ ${esc(x)}</li>`).join('')||'<li class="muted">—</li>'}</ul></div>
+          ${(job.match_concerns||[]).length?`<div class="match-col concerns"><strong>Things to clarify</strong><ul>${job.match_concerns.map(x=>`<li>• ${esc(x)}</li>`).join('')}</ul></div>`:''}
         </div>
-        <details class="score-details"><summary>Score-Herleitung</summary><div class="score-bars">${(job.match_breakdown||[]).map(b=>`<div class="score-bar"><span>${esc(b.dimension)}</span><div><i style="width:${Math.round((b.points/b.max)*100)}%"></i></div><small>${b.points}/${b.max} · ${esc(b.detail||'')}</small></div>`).join('')}</div></details>
+        <details class="score-details"><summary>Score-Herleitung</summary><div class="score-bars">${(job.match_breakdown||[]).map(b=>`<div class="score-bar"><span>${esc(b.dimension)}</span><div><i style="width:${Math.max(0,Math.min(100,Math.round((b.points/b.max)*100)))}%"></i></div><small>${b.points}/${b.max} · ${esc(b.detail||'')}</small></div>`).join('')}</div></details>
       </div>
       <div class="scout-job-actions">
-        <a class="btn ghost" href="${esc(job.job_url)}" target="_blank" rel="noopener noreferrer">OPEN JOB</a>
-        ${job.state!=='APPLIED'?`<button class="btn primary" type="button" data-convert-job="${job.id}">APPLY / In Bewerbungen</button>`:'<button class="btn ghost" type="button" disabled>Übernommen</button>'}
-        ${job.state!=='SAVED'&&job.state!=='APPLIED'?`<button class="link-button" type="button" data-job-state="SAVED" data-job-id="${job.id}">SAVE</button>`:''}
-        ${job.state!=='IGNORED'&&job.state!=='APPLIED'?`<button class="link-button muted-action" type="button" data-job-state="IGNORED" data-job-id="${job.id}">IGNORE</button>`:''}
+        <a class="btn ghost" href="${esc(job.job_url)}" target="_blank" rel="noopener noreferrer">Open Job</a>
+        ${job.state!=='SAVED'&&job.state!=='APPLIED'?`<button class="btn ghost" type="button" data-job-state="SAVED" data-job-id="${job.id}">Save</button>`:''}
+        ${job.state!=='APPLIED'?`<button class="btn primary" type="button" data-convert-job="${job.id}">Add to Applications</button>`:'<button class="btn ghost" type="button" disabled>Übernommen</button>'}
+        ${job.state!=='IGNORED'&&job.state!=='APPLIED'?`<button class="link-button muted-action" type="button" data-job-state="IGNORED" data-job-id="${job.id}">Ignore</button>`:''}
         ${job.state==='IGNORED'?`<button class="link-button" type="button" data-job-state="SEEN" data-job-id="${job.id}">Wieder anzeigen</button>`:''}
       </div>
     </article>`).join('');
   }
 
   function renderRejected(data){
-    const items=(data&&data.items)||[], summary=(data&&data.summary)||[];
+    const items=(data&&data.items)||[], summary=(data&&data.summary)||[], groups=(data&&data.groups)||[];
     $('rejectedCount').textContent=items.length;
+    $('rejectedGroups').innerHTML=groups.length
+      ? groups.map(g=>`<span class="reject-group"><strong>${g.count}</strong> ${esc(g.label)}</span>`).join('')
+      : '';
     $('rejectedSummary').innerHTML=summary.length
       ? summary.map(s=>`<span class="pill">${esc(REJECT_LABEL[s.reason_code]||s.reason_code)}: ${s.count}</span>`).join('')
       : '<span class="muted">Im letzten Lauf wurde nichts gefiltert.</span>';
@@ -273,6 +335,26 @@
       return `<div class="source-row"><div><strong>${esc(src.name)}</strong><small>${esc(sourceTypeLabel(src.source_type))}${detail?` · ${esc(detail)}`:''}</small>${src.limitations?`<small class="muted">${esc(src.limitations)}</small>`:''}</div><label class="switch-line"><input type="checkbox" data-source-toggle="${src.id}" ${src.enabled?'checked':''}> aktiv</label>${fixed?'':`<button type="button" class="link-button muted-action" data-source-delete="${src.id}">Löschen</button>`}</div>`;
     }).join('');
   }
+  // ---- Company watchlist ----
+  const WL_TYPE_LABEL={manual:'Nur Karriereseite',greenhouse:'Greenhouse',lever:'Lever',rss:'RSS / Atom'};
+  function renderWatchlist(){
+    const entries=state.watchlist||[];
+    $('watchlistList').innerHTML = entries.length ? entries.map(e=>`<div class="watchlist-row">
+      <div class="watchlist-main">
+        <div><span class="pill prio-${esc(e.priority)}">${esc(e.priority)}</span> <strong>${esc(e.company_name)}</strong></div>
+        <small>${esc(WL_TYPE_LABEL[e.career_source_type]||e.career_source_type)}${e.career_source_identifier?` · ${esc(e.career_source_identifier)}`:''}${e.last_scan_at?` · zuletzt ${fmtDate(e.last_scan_at)}`:''}</small>
+        ${e.automated?'<small class="muted">Wird beim Scan automatisch abgefragt.</small>':'<small class="muted">Keine zuverlässige öffentliche Schnittstelle — bewusst kein Scraper.</small>'}
+      </div>
+      <div class="watchlist-actions">
+        ${e.career_url?`<a class="btn ghost" href="${esc(e.career_url)}" target="_blank" rel="noopener noreferrer">Open careers page</a>`:''}
+        <label class="switch-line"><input type="checkbox" data-wl-toggle="${e.id}" ${e.enabled?'checked':''}> aktiv</label>
+        <button type="button" class="link-button muted-action" data-wl-delete="${e.id}">Entfernen</button>
+      </div>
+    </div>`).join('') : '<p class="muted">Noch keine Unternehmen auf der Watchlist.</p>';
+  }
+  async function loadWatchlist(){ const data=await api('/api/watchlist'); state.watchlist=data.entries||[]; renderWatchlist(); }
+  async function openWatchlist(){ await loadWatchlist(); openModal('watchlistModal'); }
+
   async function openSources(){ state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); openModal('sourcesModal'); }
   function updateSourceFields(){
     const type=$('sourceType').value;
@@ -298,6 +380,31 @@
     }catch(err){ toast(err.message); }
     finally{ btn.disabled=false; }
   });
+  async function applyRecommended(confirmFirst){
+    const rec=state.profile&&state.profile.recommended_preset;
+    if(!rec){ toast('Kein empfohlenes Profil verfügbar.'); return; }
+    if(confirmFirst && !confirm(`„${rec.name}" übernehmen? Die aktuellen Filter werden dabei ersetzt. Die Bewerbungen, gemerkten und ignorierten Jobs bleiben unverändert.`)) return;
+    try{ await api(`/api/presets/${encodeURIComponent(rec.key)}/apply`,{method:'POST',body:'{}'}); await loadScout(); toast(`Profil übernommen: ${rec.name}`); }
+    catch(err){ toast(err.message); }
+  }
+  $('applyRecommendedBtn').addEventListener('click',()=>applyRecommended(false));
+  $('restoreRecommendedBtn').addEventListener('click',()=>applyRecommended(true));
+  $('editProfileBtn').addEventListener('click',()=>{ const d=$('advancedSettings'); d.open=true; d.scrollIntoView({behavior:'smooth',block:'start'}); });
+  $('watchlistBtn').addEventListener('click',()=>openWatchlist().catch(err=>toast(err.message)));
+  $('watchlistForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    try{
+      await api('/api/watchlist',{method:'POST',body:JSON.stringify({
+        company_name:$('wlName').value.trim(), priority:$('wlPriority').value,
+        career_source_type:$('wlType').value, career_source_identifier:$('wlIdent').value.trim(),
+        career_url:$('wlUrl').value.trim(), enabled:true})});
+      $('watchlistForm').reset(); updateWatchlistFields(); await loadWatchlist();
+      await loadScout(); toast('Unternehmen hinzugefügt.');
+    }catch(err){ toast(err.message); }
+  });
+  function updateWatchlistFields(){ $('wlIdentWrap').classList.toggle('hidden',$('wlType').value==='manual'); $('wlIdent').required=$('wlType').value!=='manual'; }
+  $('wlType').addEventListener('change',updateWatchlistFields);
+
   $('resetFiltersBtn').addEventListener('click',async()=>{
     if(!confirm('Filter auf die Standardwerte zurücksetzen?'))return;
     try{ await api('/api/search-profile',{method:'PUT',body:JSON.stringify(state.profile.defaults||{})}); await loadScout(); toast('Filter zurückgesetzt.'); }
@@ -320,19 +427,21 @@
     const delEvent=e.target.closest('[data-delete-event]'); if(delEvent&&confirm('Dieses Ereignis löschen?')){try{await api(`/api/events/${delEvent.dataset.deleteEvent}`,{method:'DELETE'});toast('Ereignis gelöscht.');await loadAll();await showDetail(state.selectedId);}catch(err){toast(err.message);}}
     const srcToggle=e.target.closest('[data-source-toggle]'); if(srcToggle){ const src=state.sources.find(x=>x.id===Number(srcToggle.dataset.sourceToggle)); if(src){ try{ await api(`/api/scout/sources/${src.id}`,{method:'PUT',body:JSON.stringify({name:src.name,source_type:src.source_type,config:src.config||{},enabled:srcToggle.checked})}); state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); }catch(err){toast(err.message);} } }
     const srcDelete=e.target.closest('[data-source-delete]'); if(srcDelete&&confirm('Diese Jobquelle wirklich löschen?')){ try{await api(`/api/scout/sources/${srcDelete.dataset.sourceDelete}`,{method:'DELETE'}); state.sources=await api('/api/scout/sources'); renderSources(); renderSourcesSummary(); toast('Quelle gelöscht.');}catch(err){toast(err.message);} }
+    const wlToggle=e.target.closest('[data-wl-toggle]'); if(wlToggle){ const entry=(state.watchlist||[]).find(x=>x.id===Number(wlToggle.dataset.wlToggle)); if(entry){ try{ await api(`/api/watchlist/${entry.id}`,{method:'PUT',body:JSON.stringify({enabled:wlToggle.checked})}); await loadWatchlist(); }catch(err){toast(err.message);} } }
+    const wlDelete=e.target.closest('[data-wl-delete]'); if(wlDelete&&confirm('Dieses Unternehmen von der Watchlist entfernen?')){ try{ await api(`/api/watchlist/${wlDelete.dataset.wlDelete}`,{method:'DELETE'}); await loadWatchlist(); toast('Entfernt.'); }catch(err){toast(err.message);} }
     const stateBtn=e.target.closest('[data-job-state]'); if(stateBtn){try{await api(`/api/scout/jobs/${stateBtn.dataset.jobId}/state`,{method:'PUT',body:JSON.stringify({state:stateBtn.dataset.jobState})});toast(`Status: ${STATE_LABEL[stateBtn.dataset.jobState]||stateBtn.dataset.jobState}`);await Promise.all([loadScout(),loadAll()]);}catch(err){toast(err.message);}}
     const conv=e.target.closest('[data-convert-job]'); if(conv){try{const result=await api(`/api/scout/jobs/${conv.dataset.convertJob}/convert`,{method:'POST',body:'{}'});toast(result.already_exists?'Bewerbung existiert bereits.':'Job in Bewerbungen übernommen.');await Promise.all([loadScout(),loadAll()]);setView('applicationsView');await editApplication(result.application.id);}catch(err){toast(err.message);}}
   });
 
   ['searchInput','statusFilter','priorityFilter'].forEach(id=>{const el=$(id);el.addEventListener(id==='searchInput'?'input':'change',()=>{clearTimeout(loadAll.timer);loadAll.timer=setTimeout(()=>loadAll().catch(err=>toast(err.message)),180);});});
-  ['scoutSearch','scoutStateFilter','scoutNewOnly'].forEach(id=>{const el=$(id);el.addEventListener(id==='scoutSearch'?'input':'change',()=>{clearTimeout(loadScout.timer);loadScout.timer=setTimeout(()=>loadScout().catch(err=>toast(err.message)),180);});});
+  ['scoutSearch','scoutStateFilter','scoutNewOnly','scoutSort'].forEach(id=>{const el=$(id);el.addEventListener(id==='scoutSearch'?'input':'change',()=>{clearTimeout(loadScout.timer);loadScout.timer=setTimeout(()=>loadScout().catch(err=>toast(err.message)),180);});});
 
   $('backupBtn').addEventListener('click',async()=>{try{const res=await fetch('/api/export');if(!res.ok)throw new Error('Backup konnte nicht erstellt werden.');const blob=await res.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`bewerbungs-tracker-backup-${todayIso()}.json`;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(a.href);}catch(err){toast(err.message);}});
   $('importFile').addEventListener('change',async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;if(!confirm('Import ersetzt den aktuellen Datenbestand vollständig. Fortfahren?'))return;try{const data=JSON.parse(await file.text());await api('/api/import',{method:'POST',body:JSON.stringify(data)});toast('Backup importiert.');state.profile=null;await Promise.all([loadAll(),loadScout()]);}catch(err){toast(`Import fehlgeschlagen: ${err.message}`);}});
   document.querySelectorAll('.modal-backdrop').forEach(backdrop=>backdrop.addEventListener('mousedown',e=>{if(e.target===backdrop)closeModal(backdrop.id);})); document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(m=>closeModal(m.id));});
 
   async function init(){
-    initSelects(); updateSourceFields();
+    initSelects(); updateSourceFields(); updateWatchlistFields();
     await Promise.all([loadAll(),loadScout()]);
     if(state.scoutSummary?.auto_due && state.scoutSummary?.auto_hours>0){ runScout(true); }
     // While the app stays open, check once per hour whether the configured search interval is due.

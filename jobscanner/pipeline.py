@@ -18,10 +18,10 @@ import concurrent.futures
 import json
 
 from .db import connect, load_profile, row_to_dict, utc_now_iso
-from .filters import HardFilter
+from .filters import HardFilter, rejection_group
 from .normalizer import JobNormalizer
 from .repository import JobRepository
-from .scoring import MatchScorer
+from .scoring import EXCELLENT_FROM, STRONG_FROM, MatchScorer
 from .sources import SourceError, get_adapter
 
 FETCH_TIMEOUT = 90
@@ -101,13 +101,16 @@ def _run_scan(conn, fetcher):
         normalized.append(job)
 
     # 4: hard filter. 5: score only what survived.
-    accepted, rejected_count = [], 0
+    accepted, rejected_count, geo_passed = [], 0, 0
     for job in normalized:
         rejection = hard_filter.check(job, profile)
         if rejection:
+            if rejection_group(rejection.get('code')) != 'geography':
+                geo_passed += 1     # survived geography, dropped for another reason
             repo.record_rejection(run_id, job, rejection)
             rejected_count += 1
             continue
+        geo_passed += 1
         scored = scorer.score(job, profile)
         minimum = int(profile.get('minimum_match_score') or 0)
         if scored['score'] < minimum:
@@ -137,11 +140,15 @@ def _run_scan(conn, fetcher):
     finished = utc_now_iso()
     status = 'ok' if not errors else ('partial' if accepted or normalized else 'error')
     conn.execute('''UPDATE scout_runs SET finished_at=?,status=?,fetched_count=?,matched_count=?,
-                    new_count=?,errors=?,sources_scanned=?,rejected_count=? WHERE id=?''',
+                    new_count=?,errors=?,sources_scanned=?,rejected_count=?,geo_passed_count=?
+                    WHERE id=?''',
                  (finished, status, len(normalized), len(accepted), new_count,
-                  json.dumps(errors, ensure_ascii=False), len(sources), rejected_count, run_id))
+                  json.dumps(errors, ensure_ascii=False), len(sources), rejected_count,
+                  geo_passed, run_id))
     conn.commit()
 
+    strong = sum(1 for _, s in accepted if s['score'] >= STRONG_FROM)
+    excellent = sum(1 for _, s in accepted if s['score'] >= EXCELLENT_FROM)
     return {
         'run_id': run_id,
         'status': status,
@@ -153,6 +160,9 @@ def _run_scan(conn, fetcher):
         'duplicate_count': duplicates,
         'rejected_count': rejected_count,
         'matched_count': len(accepted),
+        'geo_passed_count': geo_passed,
+        'strong_count': strong,
+        'excellent_count': excellent,
         'new_count': new_count,
         'expired_count': expired_count,
         'errors': errors,

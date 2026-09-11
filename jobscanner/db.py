@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import presets as presets_mod
 from . import profile as profile_mod
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,7 +20,7 @@ DEFAULT_DB_PATH = BASE_DIR / 'data' / 'applications.db'
 # Overridable for tests via set_db_path() or the JOB_TRACKER_DB env variable.
 _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def set_db_path(path):
@@ -216,6 +217,72 @@ CREATE TABLE IF NOT EXISTS rejected_jobs (
 CREATE INDEX IF NOT EXISTS idx_rejected_run ON rejected_jobs(run_id);
 '''
 
+# --- migration 005: built-in presets, stored separately from the active profile ---
+PRESETS_DDL = '''
+CREATE TABLE IF NOT EXISTS search_presets (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    career_summary TEXT NOT NULL DEFAULT '',
+    is_recommended INTEGER NOT NULL DEFAULT 0,
+    is_builtin INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+'''
+
+# --- migration 005: company watchlist ------------------------------------
+WATCHLIST_DDL = '''
+CREATE TABLE IF NOT EXISTS company_watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    priority TEXT NOT NULL DEFAULT 'B',
+    career_source_type TEXT NOT NULL DEFAULT 'manual',
+    career_source_identifier TEXT NOT NULL DEFAULT '',
+    career_url TEXT NOT NULL DEFAULT '',
+    source_id INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    last_scan_at TEXT NOT NULL DEFAULT '',
+    last_scan_status TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(source_id) REFERENCES job_sources(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_watchlist_priority ON company_watchlist(priority, company_name);
+'''
+
+#: Seed list: (company, priority, career_source_type, identifier, careers URL).
+#: Every entry starts as ``manual`` on purpose - a company only gets an
+#: automated source when a real, public, machine-readable endpoint is known.
+#: No HTML scraping is implemented for any of them.
+WATCHLIST_SEED = [
+    ('Google', 'A', 'https://www.google.com/about/careers/applications/jobs/results/?location=Switzerland'),
+    ('Microsoft', 'A', 'https://jobs.careers.microsoft.com/global/en/search?lc=Switzerland'),
+    ('Amazon Web Services / AWS', 'A', 'https://www.amazon.jobs/en/search?loc_query=Switzerland'),
+    ('Meta', 'B', 'https://www.metacareers.com/jobs'),
+    ('NVIDIA', 'A', 'https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite'),
+    ('IBM', 'B', 'https://www.ibm.com/careers/search'),
+    ('Red Hat', 'B', 'https://www.redhat.com/en/jobs'),
+    ('UBS', 'A', 'https://jobs.ubs.com/'),
+    ('SIX', 'A', 'https://www.six-group.com/en/company/careers.html'),
+    ('Swiss Re', 'A', 'https://careers.swissre.com/'),
+    ('Zurich Insurance', 'B', 'https://www.zurich.com/careers'),
+    ('Swisscom', 'A', 'https://www.swisscom.ch/en/about/career.html'),
+    ('PostFinance', 'B', 'https://www.postfinance.ch/en/about-us/jobs-career.html'),
+    ('Roche', 'A', 'https://careers.roche.com/global/en'),
+    ('Novartis', 'A', 'https://www.novartis.com/careers'),
+    ('ABB', 'A', 'https://careers.abb/'),
+    ('Hitachi Energy', 'B', 'https://www.hitachienergy.com/careers'),
+    ('Siemens Switzerland', 'B', 'https://jobs.siemens.com/careers?location=Switzerland'),
+    ('Zuehlke', 'B', 'https://www.zuehlke.com/en/careers'),
+    ('Adnovum', 'B', 'https://www.adnovum.com/en/company/careers'),
+    ('Avaloq', 'B', 'https://www.avaloq.com/careers'),
+    ('Scandit', 'B', 'https://www.scandit.com/careers/'),
+    ('Proton', 'B', 'https://proton.me/careers'),
+]
+
 DEFAULT_SOURCES = [
     ('Arbeitnow', 'arbeitnow', '{}', 1),
     ('Remotive', 'remotive', '{}', 1),
@@ -238,6 +305,8 @@ def migrate(conn):
     conn.executescript(BASE_SCHEMA)
     conn.executescript(SEARCH_PROFILE_DDL)
     conn.executescript(REJECTED_DDL)
+    conn.executescript(PRESETS_DDL)
+    conn.executescript(WATCHLIST_DDL)
 
     # -- discovered_jobs: normalized location + explainable scoring ---------
     _add_column(conn, 'discovered_jobs', 'source_type', "TEXT NOT NULL DEFAULT ''")
@@ -278,8 +347,21 @@ def migrate(conn):
     _add_column(conn, 'scout_runs', 'sources_scanned', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'rejected_count', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'profile_snapshot', "TEXT NOT NULL DEFAULT '{}'")
+    _add_column(conn, 'scout_runs', 'geo_passed_count', 'INTEGER NOT NULL DEFAULT 0')
+
+    # -- search_profile: fields introduced with the leadership preset ------
+    _add_column(conn, 'search_profile', 'tertiary_locations', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'secondary_titles', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'location_filter_mode', "TEXT NOT NULL DEFAULT 'hard'")
+    _add_column(conn, 'search_profile', 'salary_mode', "TEXT NOT NULL DEFAULT 'hard'")
+    _add_column(conn, 'search_profile', 'salary_target_chf', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'salary_floor_chf', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'sort_mode', "TEXT NOT NULL DEFAULT 'score'")
+    _add_column(conn, 'search_profile', 'preset_key', "TEXT NOT NULL DEFAULT ''")
 
     _seed_sources(conn)
+    _seed_presets(conn)
+    _seed_watchlist(conn)
     _seed_profile(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
@@ -295,11 +377,87 @@ def _seed_sources(conn):
             [(n, t, c, e, ts, ts) for n, t, c, e in DEFAULT_SOURCES])
 
 
+def _seed_presets(conn):
+    """Keep the built-in presets in sync with the code.
+
+    Presets are code-owned, so an upsert is safe: it never touches the active
+    profile in ``search_profile``, only the catalogue the UI offers.
+    """
+    ts = now_iso()
+    for preset in presets_mod.all_presets():
+        conn.execute(
+            '''INSERT INTO search_presets (key,name,description,career_summary,is_recommended,
+                    is_builtin,payload_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,1,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET
+                    name=excluded.name, description=excluded.description,
+                    career_summary=excluded.career_summary,
+                    is_recommended=excluded.is_recommended,
+                    payload_json=excluded.payload_json, updated_at=excluded.updated_at''',
+            (preset['key'], preset['name'], preset.get('description') or '',
+             preset.get('career_summary') or '', 1 if preset.get('is_recommended') else 0,
+             json.dumps(preset['profile'], ensure_ascii=False), ts, ts))
+
+
+def _seed_watchlist(conn):
+    """Seed the company watchlist once; user edits are never overwritten."""
+    ts = now_iso()
+    for company, priority, url in WATCHLIST_SEED:
+        conn.execute(
+            '''INSERT OR IGNORE INTO company_watchlist
+                 (company_name,enabled,priority,career_source_type,career_source_identifier,
+                  career_url,notes,last_scan_at,last_scan_status,created_at,updated_at)
+               VALUES (?,1,?,'manual','',?,'','','',?,?)''',
+            (company, priority, url, ts, ts))
+
+
+def load_presets(conn):
+    """Every stored preset, newest built-ins first, recommended on top."""
+    rows = conn.execute('SELECT * FROM search_presets ORDER BY is_recommended DESC, name').fetchall()
+    out = []
+    for row in rows:
+        data = row_to_dict(row)
+        try:
+            payload = json.loads(data.get('payload_json') or '{}')
+        except (TypeError, ValueError):
+            payload = {}
+        data.pop('payload_json', None)
+        data['is_recommended'] = bool(data.get('is_recommended'))
+        data['is_builtin'] = bool(data.get('is_builtin'))
+        data['profile'] = profile_mod.sanitize(payload)
+        data['summary'] = presets_mod.summarize(data['profile'])
+        out.append(data)
+    return out
+
+
+def get_preset(conn, key):
+    for preset in load_presets(conn):
+        if preset['key'] == key:
+            return preset
+    return None
+
+
+def apply_preset(conn, key):
+    """Copy a preset into the active search profile.
+
+    This is the ONLY path by which a preset reaches the profile the scanner
+    uses.  Migrations and application updates never do it implicitly.
+    """
+    preset = get_preset(conn, key)
+    if preset is None:
+        raise ValueError('Unknown search preset: {0}'.format(key))
+    payload = dict(preset['profile'])
+    payload['preset_key'] = preset['key']
+    return save_profile(conn, payload)
+
+
 def _seed_profile(conn):
     """Create the canonical profile row, carrying over the legacy profile once."""
     if conn.execute('SELECT id FROM search_profile WHERE id=1').fetchone():
         return
-    data = dict(profile_mod.DEFAULT_PROFILE)
+    # A brand new database starts on the recommended preset - there is nothing
+    # to preserve yet.  An existing profile row is never touched here.
+    data = presets_mod.recommended_profile()
 
     if _table_exists(conn, 'job_search_profile'):
         legacy = conn.execute('SELECT * FROM job_search_profile WHERE id=1').fetchone()
@@ -359,6 +517,10 @@ def _seed_profile(conn):
             }
             # min_score is intentionally NOT carried over: the old scale mixed a
             # location bonus into the score, so the numbers are not comparable.
+            #
+            # Carrying legacy values over means the result is no longer exactly
+            # the recommended preset - say so, so the UI offers "restore".
+            data['preset_key'] = ''
 
     row = profile_mod.to_row(profile_mod.sanitize(data))
     columns = ['id'] + list(row.keys()) + ['updated_at']

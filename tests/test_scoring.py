@@ -55,7 +55,7 @@ class ScoringTests(unittest.TestCase):
         self.assertGreater(_dimension(preferred, 'location'), _dimension(secondary, 'location'))
 
     def test_missing_salary_becomes_a_concern_not_a_mystery(self):
-        self.assertIn('no published salary', self.score()['concerns'])
+        self.assertIn('Compensation not published', self.score()['concerns'])
 
     def test_description_only_eligibility_is_flagged(self):
         result = self.scorer.score(

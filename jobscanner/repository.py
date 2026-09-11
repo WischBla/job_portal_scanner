@@ -3,8 +3,20 @@
 import json
 
 from .db import now_iso, row_to_dict, utc_now_iso
+from .filters import GROUP_LABELS, rejection_group
+from .scoring import EXCELLENT_FROM, STRONG_FROM
 
 JOB_STATES = ('NEW', 'SEEN', 'SAVED', 'IGNORED', 'APPLIED', 'EXPIRED')
+
+#: Result orderings offered in the UI.  'score' is the default: best match
+#: first, newest first within the same score.
+SORT_ORDERS = {
+    'score': 'match_score DESC, published_at DESC, first_seen DESC',
+    'newest': 'published_at DESC, first_seen DESC, match_score DESC',
+    'company': 'company COLLATE NOCASE ASC, match_score DESC',
+    'location': ('normalized_city COLLATE NOCASE ASC, normalized_country COLLATE NOCASE ASC, '
+                 'match_score DESC'),
+}
 ACTIVE_STATES = ('NEW', 'SEEN', 'SAVED')
 #: States the user set by hand - a rescan must never reset them.
 STICKY_STATES = ('SAVED', 'IGNORED', 'APPLIED')
@@ -58,7 +70,8 @@ class JobRepository:
             'SELECT id, state, application_id, first_seen, source_key FROM discovered_jobs '
             'WHERE dedupe_key=? LIMIT 1', (dedupe_key,)).fetchone()
 
-    def list_jobs(self, state='', search='', min_score=0, new_only=False, limit=300):
+    def list_jobs(self, state='', search='', min_score=0, new_only=False, limit=300,
+                  sort='score'):
         clauses, params = [], []
         if state:
             clauses.append('state = ?')
@@ -75,20 +88,27 @@ class JobRepository:
             clauses.append('(company LIKE ? OR title LIKE ? OR location LIKE ? OR description LIKE ?)')
             params.extend([wildcard] * 4)
         where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+        order = SORT_ORDERS.get(str(sort or 'score').lower(), SORT_ORDERS['score'])
         rows = self.conn.execute(
             'SELECT * FROM discovered_jobs{0} ORDER BY '
             "CASE state WHEN 'NEW' THEN 1 WHEN 'SEEN' THEN 2 WHEN 'SAVED' THEN 3 "
-            "WHEN 'APPLIED' THEN 4 ELSE 5 END, match_score DESC, first_seen DESC "
-            'LIMIT ?'.format(where), params + [int(limit)]).fetchall()
+            "WHEN 'APPLIED' THEN 4 ELSE 5 END, {1} "
+            'LIMIT ?'.format(where, order), params + [int(limit)]).fetchall()
         return [parse_job_row(r) for r in rows]
 
-    def counts(self):
+    def counts(self, minimum_score=0):
         def one(sql, *params):
             return self.conn.execute(sql, params).fetchone()[0]
         return {
             'new': one("SELECT COUNT(*) FROM discovered_jobs WHERE is_new=1 AND state='NEW'"),
-            'strong': one("SELECT COUNT(*) FROM discovered_jobs WHERE match_score>=70 "
-                          "AND state IN ('NEW','SEEN','SAVED')"),
+            'strong': one("SELECT COUNT(*) FROM discovered_jobs WHERE match_score>=? "
+                          "AND state IN ('NEW','SEEN','SAVED')", STRONG_FROM),
+            'excellent': one("SELECT COUNT(*) FROM discovered_jobs WHERE match_score>=? "
+                             "AND state IN ('NEW','SEEN','SAVED')", EXCELLENT_FROM),
+            'relevant': one("SELECT COUNT(*) FROM discovered_jobs WHERE match_score>=? "
+                            "AND state IN ('NEW','SEEN','SAVED')", int(minimum_score or 0)),
+            'new_strong': one("SELECT COUNT(*) FROM discovered_jobs WHERE is_new=1 "
+                              "AND match_score>=? AND state IN ('NEW','SEEN','SAVED')", STRONG_FROM),
             'saved': one("SELECT COUNT(*) FROM discovered_jobs WHERE state='SAVED'"),
             'applied': one("SELECT COUNT(*) FROM discovered_jobs WHERE state='APPLIED'"),
             'ignored': one("SELECT COUNT(*) FROM discovered_jobs WHERE state='IGNORED'"),
@@ -230,6 +250,16 @@ class JobRepository:
             rows = self.conn.execute(
                 'SELECT * FROM rejected_jobs ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
         return [row_to_dict(r) for r in rows]
+
+    def rejection_groups(self, run_id=None):
+        """Rejections rolled up into the four buckets the debug view shows."""
+        totals = {}
+        for row in self.rejection_summary(run_id):
+            group = rejection_group(row['reason_code'])
+            totals[group] = totals.get(group, 0) + int(row['count'] or 0)
+        order = ['geography', 'role', 'seniority', 'work_model', 'salary', 'score', 'other']
+        return [{'group': g, 'label': GROUP_LABELS.get(g, g), 'count': totals[g]}
+                for g in order if totals.get(g)]
 
     def rejection_summary(self, run_id=None):
         if run_id:

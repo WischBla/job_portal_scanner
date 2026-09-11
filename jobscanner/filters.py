@@ -46,6 +46,33 @@ TECHNICAL_CORE_TERMS = [
 PURE_FRONTEND_TERMS = ['frontend developer', 'front-end developer', 'front end developer',
                        'frontend engineer', 'react developer', 'ui developer']
 
+#: Reason codes grouped for the diagnostics view ("842 Geography / 18 Role / ...").
+REJECTION_GROUPS = {
+    'not_switzerland': 'geography',
+    'country_not_allowed': 'geography',
+    'location_not_selected': 'geography',
+    'onsite_outside_switzerland': 'geography',
+    'work_model': 'work_model',
+    'unrelated_function': 'role',
+    'excluded_keyword': 'role',
+    'missing_required_keyword': 'role',
+    'excluded_title': 'seniority',
+    'impossible_seniority': 'seniority',
+    'below_minimum_score': 'score',
+    'salary_below_minimum': 'salary',
+    'missing_salary': 'salary',
+    'malformed': 'other',
+}
+GROUP_LABELS = {
+    'geography': 'Geography', 'role': 'Role', 'seniority': 'Seniority',
+    'score': 'Below match threshold', 'salary': 'Salary', 'work_model': 'Work model',
+    'other': 'Other',
+}
+
+
+def rejection_group(reason_code):
+    return REJECTION_GROUPS.get(str(reason_code or ''), 'other')
+
 
 class Rejection(dict):
     def __getattr__(self, item):
@@ -84,6 +111,12 @@ class HardFilter:
         if work:
             return work
 
+        # A title the profile explicitly lists as "also relevant" counts as a
+        # technical leadership signal in its own right, so a single overlapping
+        # word cannot drop it ("Sales Operations Lead" stays, "Head of Sales"
+        # still goes).
+        is_secondary_title = any(_contains(title, phrase)
+                                 for phrase in (profile.get('secondary_titles') or []))
         for phrase in profile.get('exclude_titles') or []:
             if _contains(title, phrase):
                 return _reject('excluded_title',
@@ -97,7 +130,8 @@ class HardFilter:
             if _contains(title, term):
                 return _reject('unrelated_function',
                                'Title names another job function ("{0}").'.format(term.strip()))
-        has_technical_core = any(_contains(title, term) for term in TECHNICAL_CORE_TERMS)
+        has_technical_core = is_secondary_title or any(
+            _contains(title, term) for term in TECHNICAL_CORE_TERMS)
         for term in SOFT_UNRELATED_TERMS:
             if _contains(title, term) and not has_technical_core:
                 return _reject('unrelated_function',
@@ -142,8 +176,14 @@ class HardFilter:
         if mode == 'off':
             return None
 
+        # In 'ranking' mode the preferred-location lists only rank: a Swiss job
+        # in an unlisted city stays in the results, it simply scores lower.
+        if (profile.get('location_filter_mode') or 'hard').lower() != 'hard':
+            return None
+
         allowed_locations = profile.get('allowed_locations') or []
-        optional_locations = profile.get('optional_locations') or []
+        optional_locations = (profile.get('optional_locations') or []) + \
+                             (profile.get('tertiary_locations') or [])
         if allowed_locations:
             wanted = {fold(x) for x in allowed_locations} | {fold(x) for x in optional_locations}
             city = fold(job.get('normalized_city') or '')
@@ -172,6 +212,11 @@ class HardFilter:
 
     # -- salary ------------------------------------------------------------
     def _check_salary(self, job, profile):
+        # Salary is only ever a hard gate when the user asked for that.  In the
+        # recommended 'ranking' mode an excellent role without a published
+        # salary must never disappear - it becomes a concern, not a rejection.
+        if (profile.get('salary_mode') or 'hard').lower() != 'hard':
+            return None
         minimum = int(profile.get('minimum_salary_chf') or 0)
         currency = (job.get('salary_currency') or '').upper()
         low, high = job.get('salary_min'), job.get('salary_max')

@@ -158,6 +158,65 @@ Ablehnungen des letzten Laufs, gruppiert nach Grund — inklusive Klartext wie
 
 ---
 
+## Empfohlenes Profil: „Sebastian - Swiss Leadership Search“
+
+Der Job Scout liefert ein fertiges, eingebautes Suchprofil mit. Es ist als **Recommended**
+markiert und beantwortet die Frage „welche Filter soll ich setzen?“ ein für alle Mal.
+
+| | |
+| --- | --- |
+| Land | Schweiz — **Strict Switzerland**, harter Filter |
+| Standorte | Tier 1 Zürich · Zug · Luzern · Bern · Basel, Tier 2 St. Gallen · Schwyz · Aargau, Tier 3 Lugano |
+| Standort-Modus | **ranking** — die Listen priorisieren, sie schliessen keinen Schweizer Job aus |
+| Arbeitsmodell | Remote + Hybrid + Onsite (Onsite nur in der Schweiz), max. 2 Bürotage |
+| Zielseniorität | Head of · Director · Senior Director · Principal · Global Lead · Senior Lead · Lead |
+| Ebenfalls erlaubt | Engineering Manager, (Principal/Senior) Technical Program Manager, Platform/SRE/Cloud Engineering Manager, … |
+| Mindestscore | **62** — bewusst nicht 75 / 80 / 82 |
+| Gehalt | **Ranking-Signal**, kein harter Filter; fehlende Angabe kostet keinen Punkt |
+| Sprachen | Deutsch, Englisch |
+| Sortierung | Best Match, danach Datum |
+
+Drei Prinzipien halten das Profil breit genug zum **Entdecken**:
+
+1. **Nur Geografie ist hart.** Titel, Standort-Tier, Gehalt und Bürotage sind Ranking- und
+   Klärungssignale — ein exzellenter Job verschwindet nie, weil der Arbeitgeber etwas nicht
+   veröffentlicht hat.
+2. **Kein Titel-Whitelisting.** „Director, Technology Enablement“, „Head of Engineering
+   Productivity“ oder „Principal Technical Program Manager“ punkten stark, ohne im
+   Vokabular zu stehen. Ein einzelnes überlappendes Wort verwirft nichts: *Head of Sales*
+   fliegt raus, *Head of Sales Engineering* bleibt.
+3. **Matrix- und Programmleitung zählen voll.** Disziplinarische Führung ist keine
+   Voraussetzung.
+
+**Bedienung** — der Job Scout zeigt oben nur noch die fünf Kennzahlen des aktiven Profils,
+alles Weitere liegt hinter **Advanced settings**:
+
+* `[ Use recommended profile ]` erscheint, solange eigene Einstellungen aktiv sind.
+* `[ RESTORE RECOMMENDED PROFILE ]` setzt nach Rückfrage auf das Preset zurück.
+* Jede manuelle Änderung macht das Profil wieder zu *deinem* Profil (`preset_key` wird leer).
+
+Ein **bestehendes Profil wird nie überschrieben**. Presets liegen in einer eigenen Tabelle
+(`search_presets`), das aktive Profil in `search_profile` — eine Aktualisierung der App
+verändert gespeicherte Filter also nicht.
+
+---
+
+## Company Watchlist
+
+Unter **Company watchlist** liegen die beobachteten Unternehmen (Priorität A/B, aktiv/inaktiv,
+Karriereseite, letzter Scan). Vorbelegt sind u. a. Google, Microsoft, AWS, NVIDIA, UBS, SIX,
+Swiss Re, Roche, Novartis, ABB, Swisscom (Priorität A) sowie Meta, IBM, Red Hat, Zurich
+Insurance, PostFinance, Hitachi Energy, Siemens Switzerland, Zühlke, Adnovum, Avaloq,
+Scandit, Proton (Priorität B).
+
+Wird bei einem Eintrag ein **öffentliches, maschinenlesbares** Board hinterlegt
+(Greenhouse-Token, Lever-Site oder RSS-Feed), legt die Watchlist automatisch die passende
+Quelle in `job_sources` an und der Scan fragt sie mit ab. Andernfalls bleibt der Eintrag
+bewusst auf `manual` und bietet nur **Open careers page** — für Karriereseiten ohne
+offizielle Schnittstelle wird **kein HTML-Scraper** gebaut, weil er unbemerkt kaputtgeht.
+
+---
+
 ## Suchprofil
 
 Das Profil liegt in der Tabelle `search_profile` (genau eine Zeile). **SQLite ist die einzige
@@ -165,14 +224,24 @@ Wahrheit** — das Frontend hält bewusst keine eigene Kopie, sondern liest nach
 neu. Felder:
 
 `country_mode`, `allowed_countries`, `allowed_locations`, `optional_locations`,
-`remote_policy`, `hybrid_max_office_days`, `seniority_levels`, `include_titles`,
-`exclude_titles`, `required_keywords`, `preferred_keywords`, `excluded_keywords`,
-`minimum_match_score`, `minimum_salary_chf`, `allow_missing_salary`,
-`language_preferences`, `sources_enabled`, `auto_hours`.
+`tertiary_locations`, `location_filter_mode`, `remote_policy`, `hybrid_max_office_days`,
+`seniority_levels`, `secondary_titles`, `include_titles`, `exclude_titles`,
+`required_keywords`, `preferred_keywords`, `excluded_keywords`, `minimum_match_score`,
+`salary_mode`, `minimum_salary_chf`, `salary_target_chf`, `salary_floor_chf`,
+`allow_missing_salary`, `language_preferences`, `sources_enabled`, `sort_mode`,
+`auto_hours`, `preset_key`.
 
-Standard: `country_mode = strict`, Land Schweiz, Standorte Zürich · Zug · Luzern · Bern · Basel
-(sekundär St. Gallen · Schwyz · Aargau · Lugano), Remote/Hybrid/Onsite erlaubt,
-maximal 2 Bürotage pro Woche, Mindestscore 65.
+Drei Felder steuern, **wie hart** ein Kriterium wirkt:
+
+| Feld | Werte | Bedeutung |
+| --- | --- | --- |
+| `location_filter_mode` | `ranking` · `hard` | `ranking`: bevorzugte Orte punkten nur. `hard`: Schweizer Jobs ausserhalb der Liste werden verworfen. |
+| `salary_mode` | `ranking` · `ignore` · `hard` | `ranking` (empfohlen): Gehalt rankt. `hard`: `minimum_salary_chf` wird zum harten Filter. |
+| `sort_mode` | `score` · `newest` · `company` · `location` | Standardsortierung der Ergebnisliste. |
+
+Eine **neue** Datenbank startet auf dem empfohlenen Preset. Eine **bestehende** behält ihr
+gespeichertes Profil unverändert (`preset_key` bleibt leer) und bekommt nur den Button
+`[ Use recommended profile ]` angeboten.
 
 Im Job Scout steht der Filterblock direkt auf der Seite. **SAVE FILTERS** speichert, zeigt
 „Filter erfolgreich gespeichert“ und lädt die gespeicherten Werte sofort neu; ein Reload oder
@@ -190,7 +259,14 @@ API:
 | `GET` | `/api/scout/summary` | Lauf-Statistik und Zähler |
 | `PUT` | `/api/scout/jobs/{id}/state` | `NEW · SEEN · SAVED · IGNORED · APPLIED · EXPIRED` |
 | `POST` | `/api/scout/jobs/{id}/convert` | in den Bewerbungs-Tracker übernehmen |
+| `GET` | `/api/presets` | eingebaute Presets + aktuell aktives |
+| `POST` | `/api/presets/{key}/apply` | Preset ins aktive Profil kopieren |
+| `GET` · `POST` | `/api/watchlist` | Watchlist lesen / Unternehmen anlegen |
+| `PUT` · `DELETE` | `/api/watchlist/{id}` | Watchlist-Eintrag ändern / entfernen |
 
+`/api/scout/jobs` akzeptiert `?sort=score|newest|company|location`.
+`/api/scout/summary` liefert zusätzlich den Trichter (`funnel`: fetched → swiss_eligible →
+relevant → strong → excellent) und `rejection_groups`.
 `/api/scout/profile` bleibt als Alias erhalten.
 
 ---
@@ -264,9 +340,14 @@ LinkedIn und jobs.ch werden nicht über inoffizielle Scraper ausgelesen.
 `data/applications.db` wird nie gelöscht oder neu aufgebaut. Beim Start laufen idempotente
 Migrationen (`jobscanner/db.py`), die ausschliesslich additiv sind:
 
-* neue Tabellen `search_profile`, `rejected_jobs`, `schema_meta`
+* neue Tabellen `search_profile`, `rejected_jobs`, `schema_meta`, `search_presets`,
+  `company_watchlist`
 * neue Spalten in `discovered_jobs` (normalisierter Standort, Arbeitsmodell, Seniorität,
-  Score-Herleitung, `state`) und in `scout_runs`
+  Score-Herleitung, `state`), in `scout_runs` (`geo_passed_count`) und in `search_profile`
+  (`salary_mode`, `location_filter_mode`, `sort_mode`, `preset_key`, `secondary_titles`,
+  `tertiary_locations`, `salary_target_chf`, `salary_floor_chf`)
+* Presets werden bei jedem Start aus dem Code aktualisiert — das **aktive** Profil in
+  `search_profile` wird dabei nie angefasst; die Watchlist wird nur einmal befüllt
 * Übernahme des alten Profils aus `job_search_profile` (Standorte, Ausschlüsse, Skills,
   Zielrollen, Gehaltsgrenze) beim ersten Start
 * Übersetzung der alten Status (`Neu`, `Gemerkt`, `Ignoriert`, `Übernommen`) in `NEW`,
@@ -286,7 +367,9 @@ run.py                    Start (Version prüfen, DB migrieren, Server, Browser)
 app.py                    HTTP-Schicht: Routing, JSON, statische Dateien
 jobscanner/
   db.py                   Verbindung + idempotente Migrationen
+  presets.py              eingebaute Suchprofile (Sebastian - Swiss Leadership Search)
   profile.py              kanonisches Suchprofil (Defaults, Validierung)
+  watchlist.py            Company Watchlist + Brücke zu job_sources
   locations.py            LocationNormalizer — die Schweiz-Entscheidung
   normalizer.py           Rohdaten → normalisierter Job
   filters.py              HardFilter (vor dem Scoring)

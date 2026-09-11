@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from jobscanner import db as jsdb
 from jobscanner import pipeline
+from jobscanner import presets
 from jobscanner.repository import JobRepository
 from tests.helpers import TempDatabase
 from tests.test_pipeline import fake_fetcher
@@ -90,6 +91,78 @@ class SearchProfileTests(ServerTestCase):
             self.call('PUT', '/api/search-profile', payload)
 
 
+class RecommendedPresetApiTests(ServerTestCase):
+    """The preset is offered, applied explicitly, and never applied behind the user's back."""
+
+    def test_the_recommended_preset_is_offered(self):
+        data = self.call('GET', '/api/presets')
+        recommended = [p for p in data['presets'] if p['is_recommended']]
+        self.assertEqual(len(recommended), 1)
+        self.assertEqual(recommended[0]['name'], 'Sebastian - Swiss Leadership Search')
+        self.assertEqual(recommended[0]['profile']['minimum_match_score'], 62)
+
+    def test_the_profile_endpoint_exposes_the_simplified_summary(self):
+        profile = self.call('GET', '/api/search-profile')
+        self.assertTrue(profile['is_recommended_active'])
+        summary = profile['summary']
+        self.assertIn('Switzerland', summary['country'])
+        self.assertEqual(summary['minimum_match_score'], 62)
+        self.assertIn('Remote', summary['work_model'])
+        self.assertIn('Head of', summary['target_level'])
+        self.assertEqual(summary['salary'], 'Ranking signal only')
+
+    def test_saving_by_hand_makes_the_profile_the_users_own(self):
+        payload = self.call('GET', '/api/search-profile')
+        payload['minimum_match_score'] = 80
+        payload.pop('preset_key', None)      # the UI never sends it back
+        saved = self.call('PUT', '/api/search-profile', payload)
+        self.assertEqual(saved['minimum_match_score'], 80)
+        self.assertEqual(saved['preset_key'], '')
+        self.assertFalse(saved['is_recommended_active'])
+        # ... and the stored preset is untouched.
+        stored = self.call('GET', '/api/presets')['presets'][0]
+        self.assertEqual(stored['profile']['minimum_match_score'], 62)
+
+    def test_applying_the_preset_restores_every_recommended_value(self):
+        payload = self.call('GET', '/api/search-profile')
+        payload.update({'minimum_match_score': 95, 'salary_mode': 'hard',
+                        'location_filter_mode': 'hard'})
+        payload.pop('preset_key', None)
+        self.call('PUT', '/api/search-profile', payload)
+
+        restored = self.call('POST', '/api/presets/{0}/apply'.format(presets.RECOMMENDED_KEY), {})
+        self.assertTrue(restored['is_recommended_active'])
+        self.assertEqual(restored['minimum_match_score'], 62)
+        self.assertEqual(restored['salary_mode'], 'ranking')
+        self.assertEqual(restored['location_filter_mode'], 'ranking')
+        self.assertTrue(restored['allow_missing_salary'])
+
+    def test_applying_the_preset_survives_a_restart(self):
+        self.call('POST', '/api/presets/{0}/apply'.format(presets.RECOMMENDED_KEY), {})
+        jsdb.init_db()
+        self.assertEqual(self.call('GET', '/api/search-profile')['minimum_match_score'], 62)
+
+
+class WatchlistApiTests(ServerTestCase):
+    def test_the_seeded_watchlist_is_served(self):
+        data = self.call('GET', '/api/watchlist')
+        names = {e['company_name'] for e in data['entries']}
+        self.assertIn('Roche', names)
+        self.assertIn('Google', names)
+        self.assertEqual(data['priorities'], ['A', 'B', 'C'])
+
+    def test_entries_can_be_added_updated_and_removed(self):
+        created = self.call('POST', '/api/watchlist',
+                            {'company_name': 'Example AG', 'priority': 'A',
+                             'career_url': 'https://example.test/careers'})
+        self.assertEqual(created['priority'], 'A')
+        updated = self.call('PUT', '/api/watchlist/{0}'.format(created['id']), {'enabled': False})
+        self.assertFalse(updated['enabled'])
+        self.call('DELETE', '/api/watchlist/{0}'.format(created['id']))
+        names = {e['company_name'] for e in self.call('GET', '/api/watchlist')['entries']}
+        self.assertNotIn('Example AG', names)
+
+
 class ScanUsesSavedProfileTests(ServerTestCase):
     def setUp(self):
         super().setUp()
@@ -106,6 +179,8 @@ class ScanUsesSavedProfileTests(ServerTestCase):
         payload = self.call('GET', '/api/search-profile')
         payload['allowed_locations'] = ['Zurich']
         payload['optional_locations'] = []
+        payload['tertiary_locations'] = []
+        payload['location_filter_mode'] = 'hard'   # cities restrict, not just rank
         self.call('PUT', '/api/search-profile', payload)
         self.scan()
         jobs = self.call('GET', '/api/scout/jobs')
@@ -128,6 +203,34 @@ class ScanUsesSavedProfileTests(ServerTestCase):
         self.assertEqual(summary['country_mode'], 'strict')
         self.assertEqual(summary['last_run']['status'], 'ok')
         self.assertGreaterEqual(summary['last_run']['sources_scanned'], 1)
+
+    def test_summary_reports_the_funnel(self):
+        self.scan()
+        funnel = self.call('GET', '/api/scout/summary')['funnel']
+        # Fetched >= Swiss eligible >= relevant >= strong >= excellent.
+        self.assertGreaterEqual(funnel['fetched'], funnel['swiss_eligible'])
+        self.assertGreaterEqual(funnel['swiss_eligible'], funnel['relevant'])
+        self.assertGreaterEqual(funnel['relevant'], funnel['strong'])
+        self.assertGreaterEqual(funnel['strong'], funnel['excellent'])
+        self.assertEqual(funnel['minimum_match_score'], 62)
+
+    def test_the_debug_view_groups_rejections(self):
+        self.scan()
+        groups = {g['group']: g['count'] for g in self.call('GET', '/api/scout/rejected')['groups']}
+        self.assertGreater(groups.get('geography', 0), 0)
+        self.assertGreater(groups.get('seniority', 0), 0)
+
+    def test_results_are_sorted_by_match_score_by_default(self):
+        self.scan()
+        scores = [job['match_score'] for job in self.call('GET', '/api/scout/jobs')]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_alternative_sort_orders_are_offered(self):
+        self.scan()
+        companies = [job['company'] for job in self.call('GET', '/api/scout/jobs?sort=company')]
+        self.assertEqual(companies, sorted(companies, key=str.casefold))
+        for order in ('newest', 'location', 'score'):
+            self.assertTrue(isinstance(self.call('GET', '/api/scout/jobs?sort=' + order), list))
 
 
 class ApplicationTrackerTests(ServerTestCase):

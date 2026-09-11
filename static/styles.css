@@ -99,3 +99,43 @@
 
 .source-row small.muted { display: block; margin-top: 3px; max-width: 46ch; line-height: 1.35; }
 .scout-kpis article strong { font-variant-numeric: tabular-nums; }
+
+/* ---- Recommended search profile card ---- */
+.profile-card{background:var(--panel,#fff);border:1px solid var(--line,#e3e6ec);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.profile-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.profile-card-head h3{margin:2px 0 4px}
+.pill.recommended{background:#123c2b;color:#7ff0bd}
+.profile-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 20px;margin:14px 0 10px}
+.profile-summary div{display:flex;flex-direction:column;gap:2px}
+.profile-summary dt{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;opacity:.65}
+.profile-summary dd{margin:0;font-weight:600}
+.profile-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+.advanced-settings{border:1px solid var(--line,#e3e6ec);border-radius:14px;padding:0 18px;margin-bottom:16px}
+.advanced-settings>summary{cursor:pointer;padding:14px 0;font-weight:600}
+.advanced-settings .filter-panel{border:0;padding:0 0 18px;margin:0;background:none}
+.filter-grid.inner{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:8px 0}
+
+/* ---- Scan funnel ---- */
+.funnel{background:var(--panel,#fff);border:1px solid var(--line,#e3e6ec);border-radius:14px;padding:14px 18px;margin-bottom:16px}
+.funnel h4{margin:0 0 10px;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;opacity:.7}
+.funnel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+.funnel-grid div{display:flex;flex-direction:column}
+.funnel-grid span{font-size:.74rem;opacity:.7}
+.funnel-grid strong{font-size:1.35rem}
+
+/* ---- Job card score band ---- */
+.score-ring em{display:block;font-style:normal;font-size:.6rem;letter-spacing:.06em;opacity:.8}
+
+/* ---- Rejection diagnostics ---- */
+.rejected-groups{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px}
+.reject-group{font-size:.82rem;opacity:.85}
+.reject-group strong{font-size:1.05rem;margin-right:4px}
+
+/* ---- Company watchlist ---- */
+.watchlist{display:flex;flex-direction:column;gap:8px;margin-bottom:18px;max-height:46vh;overflow:auto}
+.watchlist-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 12px;border:1px solid var(--line,#e3e6ec);border-radius:10px}
+.watchlist-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.watchlist-main small{opacity:.75}
+.watchlist-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.pill.prio-A{background:#3a2410;color:#ffc98a}
+.pill.prio-B{background:#1d2733;color:#9dc0e8}

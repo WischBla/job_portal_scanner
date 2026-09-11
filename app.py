@@ -17,10 +17,13 @@ from urllib.parse import parse_qs, urlparse
 
 from jobscanner import db as jsdb
 from jobscanner import pipeline
+from jobscanner import presets as presets_mod
 from jobscanner import profile as profile_mod
 from jobscanner.locations import LocationNormalizer
-from jobscanner.repository import JOB_STATES, JobRepository
+from jobscanner.repository import SORT_ORDERS, JOB_STATES, JobRepository
+from jobscanner.scoring import EXCELLENT_FROM, STRONG_FROM
 from jobscanner.sources import adapter_types, get_adapter
+from jobscanner.watchlist import CompanyWatchlist, PRIORITIES, WATCHLIST_SOURCE_TYPES
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / 'static'
@@ -112,6 +115,8 @@ class Handler(SimpleHTTPRequestHandler):
                 '/api/export': self.export_data,
                 '/api/search-profile': self.get_search_profile,
                 '/api/scout/profile': self.get_search_profile,          # legacy alias
+                '/api/presets': self.get_presets,
+                '/api/watchlist': self.get_watchlist,
                 '/api/scout/jobs': lambda: self.get_scout_jobs(query),
                 '/api/scout/summary': self.get_scout_summary,
                 '/api/scout/rejected': lambda: self.get_rejected(query),
@@ -142,7 +147,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json(pipeline.run_scan())
             if path == '/api/scout/sources':
                 return self.create_source(self._read_json())
+            if path == '/api/watchlist':
+                return self.create_watchlist_entry(self._read_json())
             parts = [p for p in path.split('/') if p]
+            if len(parts) == 4 and parts[:2] == ['api', 'presets'] and parts[3] == 'apply':
+                return self.apply_preset(parts[2])
             if len(parts) == 4 and parts[:2] == ['api', 'applications'] and parts[3] == 'events':
                 return self.create_event(int(parts[2]), self._read_json())
             if len(parts) == 5 and parts[:3] == ['api', 'scout', 'jobs'] and parts[4] == 'convert':
@@ -165,6 +174,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.update_application(int(parts[2]), self._read_json())
             if len(parts) == 5 and parts[:3] == ['api', 'scout', 'jobs'] and parts[4] == 'state':
                 return self.update_job_state(int(parts[3]), self._read_json())
+            if len(parts) == 3 and parts[:2] == ['api', 'watchlist']:
+                return self.update_watchlist_entry(int(parts[2]), self._read_json())
             self._not_found()
         except ValueError as exc:
             self._send_json({'error': str(exc)}, 400)
@@ -180,6 +191,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.delete_event(int(parts[2]))
             if len(parts) == 4 and parts[:3] == ['api', 'scout', 'sources']:
                 return self.delete_source(int(parts[3]))
+            if len(parts) == 3 and parts[:2] == ['api', 'watchlist']:
+                return self.delete_watchlist_entry(int(parts[2]))
             self._not_found()
         except Exception as exc:
             self._send_json({'error': str(exc)}, 500)
@@ -324,9 +337,17 @@ class Handler(SimpleHTTPRequestHandler):
                    WHERE follow_up_date <> '' AND follow_up_date <= ?
                      AND status NOT IN ('Abgelehnt','Zurückgezogen')
                    ORDER BY follow_up_date ASC LIMIT 8''', (today,)).fetchall()]
-            counts = JobRepository(conn).counts()
+            minimum = int(jsdb.load_profile(conn).get('minimum_match_score') or 0)
+            counts = JobRepository(conn).counts(minimum_score=minimum)
         data['scout_new'] = counts['new']
         data['scout_strong'] = counts['strong']
+        data['scout'] = {
+            'new_strong': counts['new_strong'],
+            'saved': counts['saved'],
+            'applications': total,
+            'interviews': data['interviews'],
+            'offers': data['offers'],
+        }
         self._send_json(data)
 
     # ---------------- Search profile ----------------
@@ -335,14 +356,70 @@ class Handler(SimpleHTTPRequestHandler):
             profile = jsdb.load_profile(conn)
             profile['available_sources'] = [row_to_dict(r) for r in conn.execute(
                 'SELECT name, source_type, enabled FROM job_sources ORDER BY id').fetchall()]
+            presets = jsdb.load_presets(conn)
+        recommended = next((p for p in presets if p['is_recommended']), None)
         profile['defaults'] = profile_mod.DEFAULT_PROFILE
         profile['seniority_options'] = profile_mod.SENIORITY_LEVELS
+        profile['summary'] = presets_mod.summarize(profile)
+        profile['presets'] = presets
+        profile['recommended_preset'] = recommended
+        # True only while the active profile still IS the recommended preset;
+        # any manual edit clears preset_key and flips this to False.
+        profile['is_recommended_active'] = bool(
+            recommended and profile.get('preset_key') == recommended['key'])
+        profile['options'] = {
+            'country_modes': list(profile_mod.COUNTRY_MODES),
+            'location_filter_modes': list(profile_mod.LOCATION_FILTER_MODES),
+            'salary_modes': list(profile_mod.SALARY_MODES),
+            'sort_modes': list(profile_mod.SORT_MODES),
+        }
         self._send_json(profile)
 
     def update_search_profile(self, payload):
         with db_connect() as conn:
             jsdb.save_profile(conn, payload)
         return self.get_search_profile()
+
+    def get_presets(self):
+        with db_connect() as conn:
+            active = jsdb.load_profile(conn).get('preset_key') or ''
+            presets = jsdb.load_presets(conn)
+        self._send_json({'presets': presets, 'active_preset': active})
+
+    def apply_preset(self, key):
+        """Copy a preset into the active profile - the explicit apply/restore."""
+        with db_connect() as conn:
+            jsdb.apply_preset(conn, key)
+        return self.get_search_profile()
+
+    # ---------------- Company watchlist ----------------
+    def get_watchlist(self):
+        with db_connect() as conn:
+            entries = CompanyWatchlist(conn).list()
+        self._send_json({
+            'entries': entries,
+            'priorities': list(PRIORITIES),
+            'source_types': list(WATCHLIST_SOURCE_TYPES),
+        })
+
+    def create_watchlist_entry(self, payload):
+        with db_connect() as conn:
+            entry = CompanyWatchlist(conn).create(payload)
+        self._send_json(entry, 201)
+
+    def update_watchlist_entry(self, entry_id, payload):
+        with db_connect() as conn:
+            entry = CompanyWatchlist(conn).update(entry_id, payload)
+        if entry is None:
+            return self._not_found()
+        self._send_json(entry)
+
+    def delete_watchlist_entry(self, entry_id):
+        with db_connect() as conn:
+            removed = CompanyWatchlist(conn).delete(entry_id)
+        if not removed:
+            return self._not_found()
+        self._send_json({'ok': True})
 
     def get_meta(self):
         self._send_json({
@@ -353,6 +430,9 @@ class Handler(SimpleHTTPRequestHandler):
                               'limitations': get_adapter(t).limitations}
                              for t in adapter_types()],
             'schema_version': jsdb.SCHEMA_VERSION,
+            'sort_modes': list(SORT_ORDERS),
+            'watchlist_source_types': list(WATCHLIST_SOURCE_TYPES),
+            'score_bands': {'excellent': EXCELLENT_FROM, 'strong': STRONG_FROM},
         })
 
     # ---------------- Job scout ----------------
@@ -366,20 +446,28 @@ class Handler(SimpleHTTPRequestHandler):
             min_score = 0
         if state and state not in JOB_STATES:
             raise ValueError('Unbekannter Job-Status: {0}'.format(state))
+        sort = (query.get('sort') or [''])[0].strip().lower()
         with db_connect() as conn:
+            if not sort:
+                sort = jsdb.load_profile(conn).get('sort_mode') or 'score'
+            if sort not in SORT_ORDERS:
+                raise ValueError('Unknown sort order: {0}'.format(sort))
             jobs = JobRepository(conn).list_jobs(state=state, search=search,
-                                                 min_score=min_score, new_only=new_only)
+                                                 min_score=min_score, new_only=new_only,
+                                                 sort=sort)
         self._send_json(jobs)
 
     def get_scout_summary(self):
         with db_connect() as conn:
             profile = jsdb.load_profile(conn)
             repo = JobRepository(conn)
-            counts = repo.counts()
+            minimum = int(profile.get('minimum_match_score') or 0)
+            counts = repo.counts(minimum_score=minimum)
             last = row_to_dict(conn.execute('SELECT * FROM scout_runs ORDER BY id DESC LIMIT 1').fetchone())
             sources = [row_to_dict(r) for r in conn.execute(
                 'SELECT name, enabled FROM job_sources ORDER BY id').fetchall()]
             rejection_summary = repo.rejection_summary(last['id'] if last else None)
+            rejection_groups = repo.rejection_groups(last['id'] if last else None)
         if last:
             try:
                 last['errors'] = json.loads(last.get('errors') or '[]')
@@ -394,15 +482,30 @@ class Handler(SimpleHTTPRequestHandler):
                 due = datetime.now(timezone.utc) - last_dt >= timedelta(hours=auto_hours)
             except ValueError:
                 due = True
+        # The funnel: does the search actually work, and where do jobs go?
+        funnel = {
+            'fetched': (last or {}).get('fetched_count') or 0,
+            'swiss_eligible': (last or {}).get('geo_passed_count') or 0,
+            'relevant': counts['relevant'],
+            'strong': counts['strong'],
+            'excellent': counts['excellent'],
+            'minimum_match_score': minimum,
+            'strong_from': STRONG_FROM,
+            'excellent_from': EXCELLENT_FROM,
+        }
         self._send_json({
             'counts': counts,
+            'funnel': funnel,
             'last_run': last,
             'auto_due': due,
             'auto_hours': auto_hours,
-            'minimum_match_score': profile.get('minimum_match_score'),
+            'minimum_match_score': minimum,
             'country_mode': profile.get('country_mode'),
+            'sort_mode': profile.get('sort_mode') or 'score',
+            'profile_summary': presets_mod.summarize(profile),
             'active_sources': [s['name'] for s in sources if s['enabled']],
             'rejection_summary': rejection_summary,
+            'rejection_groups': rejection_groups,
         })
 
     def get_rejected(self, query):
@@ -417,6 +520,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._send_json({
                 'run_id': run_id,
                 'summary': repo.rejection_summary(run_id),
+                'groups': repo.rejection_groups(run_id),
                 'items': repo.list_rejections(run_id, limit=limit),
             })
 
@@ -554,6 +658,7 @@ class Handler(SimpleHTTPRequestHandler):
                 'discovered_jobs': rows('SELECT * FROM discovered_jobs ORDER BY id'),
                 'scout_runs': rows('SELECT * FROM scout_runs ORDER BY id'),
                 'job_sources': rows('SELECT * FROM job_sources ORDER BY id'),
+                'company_watchlist': rows('SELECT * FROM company_watchlist ORDER BY id'),
             }
         filename = 'bewerbungs-tracker-backup-{0}.json'.format(datetime.now().date().isoformat())
         self._send_json(payload, 200, {'Content-Disposition': 'attachment; filename="{0}"'.format(filename)})
@@ -587,6 +692,15 @@ class Handler(SimpleHTTPRequestHandler):
                         fields = ['id', 'name', 'source_type', 'config_json', 'enabled', 'created_at', 'updated_at']
                         conn.execute('INSERT INTO job_sources ({0}) VALUES ({1})'.format(
                             ','.join(fields), ','.join('?' for _ in fields)), [source.get(f) for f in fields])
+                if isinstance(payload.get('company_watchlist'), list):
+                    conn.execute('DELETE FROM company_watchlist')
+                    fields = ['id', 'company_name', 'enabled', 'priority', 'career_source_type',
+                              'career_source_identifier', 'career_url', 'source_id', 'notes',
+                              'last_scan_at', 'last_scan_status', 'created_at', 'updated_at']
+                    for entry in payload['company_watchlist']:
+                        conn.execute('INSERT INTO company_watchlist ({0}) VALUES ({1})'.format(
+                            ','.join(fields), ','.join('?' for _ in fields)),
+                            [entry.get(f) for f in fields])
             conn.commit()
         self._send_json({'ok': True, 'applications': len(apps), 'events': len(events)})
 

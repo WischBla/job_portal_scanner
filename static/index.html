@@ -100,12 +100,50 @@
           <article><span>Übernommen</span><strong id="scoutKpiApplied">0</strong></article>
         </section>
 
+        <section class="funnel" aria-label="Scan funnel">
+          <h4>Does the search work?</h4>
+          <div class="funnel-grid">
+            <div><span>Fetched</span><strong id="funFetched">0</strong></div>
+            <div><span>Swiss eligible</span><strong id="funSwiss">0</strong></div>
+            <div><span id="funRelevantLabel">Relevant</span><strong id="funRelevant">0</strong></div>
+            <div><span id="funStrongLabel">Strong</span><strong id="funStrong">0</strong></div>
+            <div><span id="funExcellentLabel">Excellent</span><strong id="funExcellent">0</strong></div>
+          </div>
+        </section>
+
         <div id="scoutError" class="provider-error hidden"></div>
 
-        <form id="filterPanel" class="filter-panel" aria-label="Suchfilter">
+        <section id="profileCard" class="profile-card" aria-label="Search profile">
+          <div class="profile-card-head">
+            <div>
+              <div class="eyebrow">SEARCH PROFILE</div>
+              <h3 id="profileName">—</h3>
+              <p id="profileDescription" class="muted"></p>
+            </div>
+            <span id="profileBadge" class="pill recommended hidden">Recommended</span>
+          </div>
+          <dl class="profile-summary">
+            <div><dt>Country</dt><dd id="sumCountry">—</dd></div>
+            <div><dt>Work model</dt><dd id="sumWorkModel">—</dd></div>
+            <div><dt>Target level</dt><dd id="sumLevel">—</dd></div>
+            <div><dt>Minimum match</dt><dd id="sumMinScore">—</dd></div>
+            <div><dt>Salary</dt><dd id="sumSalary">—</dd></div>
+          </dl>
+          <p id="profileStateHint" class="muted"></p>
+          <div class="profile-actions">
+            <button type="button" class="btn primary hidden" id="applyRecommendedBtn">Use recommended profile</button>
+            <button type="button" class="btn ghost" id="editProfileBtn">EDIT PROFILE</button>
+            <button type="button" class="btn ghost" id="restoreRecommendedBtn">RESTORE RECOMMENDED PROFILE</button>
+            <button type="button" class="btn ghost" id="watchlistBtn">Company watchlist</button>
+            <span id="filterSavedAt" class="muted"></span>
+          </div>
+        </section>
+
+        <details id="advancedSettings" class="advanced-settings">
+          <summary>Advanced settings</summary>
+          <form id="filterPanel" class="filter-panel" aria-label="Suchfilter">
           <div class="filter-panel-head">
             <div><h3>Suchfilter</h3><p class="muted">Wird in SQLite gespeichert und genau so vom nächsten Scan verwendet.</p></div>
-            <span id="filterSavedAt" class="muted"></span>
           </div>
           <div class="filter-grid">
             <label>Land
@@ -131,6 +169,12 @@
               <legend>Standorte (Priorität)</legend>
               <div id="fLocations" class="chip-checks"></div>
               <input id="fLocationsExtra" placeholder="Weitere Orte, kommasepariert (z. B. Winterthur, Baar)">
+              <label class="form-check">Standort-Modus
+                <select id="fLocationMode">
+                  <option value="ranking">Nur Ranking – jeder Schweizer Job bleibt sichtbar</option>
+                  <option value="hard">Harter Filter – nur ausgewählte Orte</option>
+                </select>
+              </label>
             </fieldset>
 
             <fieldset class="filter-block">
@@ -145,8 +189,24 @@
               <div id="fSeniority" class="chip-checks"></div>
             </fieldset>
 
+            <fieldset class="filter-block span-2">
+              <legend>Gehalt</legend>
+              <label class="form-check"><input type="radio" name="salaryMode" value="ignore"> Gehalt ignorieren</label>
+              <label class="form-check"><input type="radio" name="salaryMode" value="ranking"> Als Ranking-Signal verwenden <small>empfohlen</small></label>
+              <label class="form-check"><input type="radio" name="salaryMode" value="hard"> Harte Untergrenze</label>
+              <div class="filter-grid inner">
+                <label>Minimum CHF <small>ab hier interessant</small><input id="fMinSalary" type="number" min="0" step="5000"></label>
+                <label>Ziel CHF <small>Zielband</small><input id="fTargetSalary" type="number" min="0" step="5000"></label>
+                <label>Untergrenze CHF <small>darunter klar zu tief</small><input id="fFloorSalary" type="number" min="0" step="5000"></label>
+              </div>
+              <label class="form-check"><input type="checkbox" id="fAllowMissingSalary"> Jobs ohne Gehaltsangabe zulassen</label>
+            </fieldset>
+
             <label class="span-2">Ausschlussbegriffe <small>Titel mit diesen Begriffen werden hart gefiltert</small>
               <textarea id="fExcluded" rows="3"></textarea>
+            </label>
+            <label class="span-2">Auch relevante Titel <small>werden nie wegen „falscher“ Seniorität verworfen</small>
+              <textarea id="fSecondaryTitles" rows="3"></textarea>
             </label>
             <label>Pflicht-Keywords <small>müssen alle vorkommen, leer = aus</small>
               <textarea id="fRequired" rows="3"></textarea>
@@ -154,15 +214,17 @@
             <label>Profil-Keywords <small>fliessen in den Score ein</small>
               <textarea id="fPreferred" rows="3"></textarea>
             </label>
-            <label>Gehalts-Untergrenze CHF <small>0 = nicht prüfen</small>
-              <input id="fMinSalary" type="number" min="0" step="5000">
+            <label>Standard-Sortierung
+              <select id="fSortMode">
+                <option value="score">Best Match</option>
+                <option value="newest">Newest</option>
+                <option value="company">Company</option>
+                <option value="location">Location</option>
+              </select>
             </label>
             <label>Auto-Suche <small>Stunden seit letztem Scan, 0 = aus</small>
               <input id="fAutoHours" type="number" min="0" max="168" step="1">
             </label>
-            <div class="check-stack">
-              <label class="form-check"><input type="checkbox" id="fAllowMissingSalary"> Jobs ohne Gehaltsangabe zulassen</label>
-            </div>
           </div>
           <div class="filter-actions">
             <span id="filterHint" class="muted"></span>
@@ -170,7 +232,8 @@
             <button type="button" class="btn ghost" id="resetFiltersBtn">Zurücksetzen</button>
             <button type="submit" class="btn primary" id="saveFiltersBtn">SAVE FILTERS</button>
           </div>
-        </form>
+          </form>
+        </details>
 
         <section class="main-panel scout-panel">
           <div class="section-head">
@@ -185,6 +248,12 @@
                 <option value="APPLIED">Übernommen</option>
                 <option value="IGNORED">Ignoriert</option>
               </select>
+              <select id="scoutSort" aria-label="Sortierung">
+                <option value="score">Best Match</option>
+                <option value="newest">Newest</option>
+                <option value="company">Company</option>
+                <option value="location">Location</option>
+              </select>
               <label class="compact-check"><input type="checkbox" id="scoutNewOnly"> Nur neue</label>
             </div>
           </div>
@@ -198,6 +267,7 @@
 
         <details id="rejectedPanel" class="rejected-panel">
           <summary>Warum Jobs gefiltert wurden <span id="rejectedCount" class="pill">0</span></summary>
+          <div id="rejectedGroups" class="rejected-groups"></div>
           <div id="rejectedSummary" class="rejected-summary"></div>
           <div id="rejectedList" class="rejected-list"></div>
         </details>
@@ -274,6 +344,24 @@
         <div class="form-actions"><div class="spacer"></div><button type="submit" class="btn primary">Quelle hinzufügen</button></div>
       </form>
       <p class="muted source-help">Greenhouse und Lever nutzen deren öffentliche Stellen-APIs. RSS funktioniert für Portale oder Firmen, die einen Job-Feed anbieten. LinkedIn/jobs.ch werden nicht per inoffiziellem Scraper abgegriffen.</p>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="watchlistModal" role="dialog" aria-modal="true" aria-labelledby="watchlistTitle">
+    <div class="modal large">
+      <div class="modal-head"><div><div class="eyebrow">COMPANY WATCHLIST</div><h2 id="watchlistTitle">Unternehmen beobachten</h2><p class="muted">Firmen mit öffentlicher Greenhouse-/Lever-/RSS-Schnittstelle werden mitgescannt. Für alle anderen gibt es bewusst nur den Link zur Karriereseite statt eines fragilen Scrapers.</p></div><button class="icon-btn" data-close="watchlistModal" aria-label="Schliessen">×</button></div>
+      <div id="watchlistList" class="watchlist"></div>
+      <form id="watchlistForm" class="source-add-form">
+        <h3>Unternehmen hinzufügen</h3>
+        <div class="form-grid">
+          <label>Unternehmen<input id="wlName" required placeholder="z. B. Beispiel AG"></label>
+          <label>Priorität<select id="wlPriority"><option>A</option><option selected>B</option><option>C</option></select></label>
+          <label>Quelle<select id="wlType"><option value="manual">Nur Karriereseite (manuell)</option><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="rss">RSS / Atom</option></select></label>
+          <label id="wlIdentWrap" class="hidden">Board Token / Site / Feed URL<input id="wlIdent" placeholder="z. B. board-token"></label>
+          <label class="span-2">Karriereseite<input id="wlUrl" type="url" placeholder="https://…/careers"></label>
+        </div>
+        <div class="form-actions"><div class="spacer"></div><button type="submit" class="btn primary">Hinzufügen</button></div>
+      </form>
     </div>
   </div>
 

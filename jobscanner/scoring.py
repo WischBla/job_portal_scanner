@@ -61,8 +61,27 @@ STRATEGIC_TERMS = [
 ]
 PEOPLE_LEADERSHIP_TERMS = ['direct reports', 'line management', 'people management',
                            'lead a team', 'manage a team', 'team of', 'hiring', 'performance reviews']
+#: Matrix / program leadership counts as fully relevant - a disciplinary
+#: people-management mandate is explicitly NOT a requirement of this profile.
+MATRIX_LEADERSHIP_TERMS = ['matrix', 'cross-functional', 'cross functional', 'program leadership',
+                           'technical leadership', 'influence without authority', 'virtual team',
+                           'steering', 'program management', 'portfolio']
 
-LABELS = [(85, 'Sehr starker Match'), (70, 'Starker Match'), (55, 'Prüfen'), (0, 'Randtreffer')]
+#: Classification bands.  Fixed, so "Excellent" always means the same thing;
+#: the profile's minimum score only decides what is shown, not what it is called.
+EXCELLENT_FROM = 80
+STRONG_FROM = 70
+LABELS = [(EXCELLENT_FROM, 'Excellent match'), (STRONG_FROM, 'Strong match'),
+          (55, 'Worth reviewing'), (0, 'Weak match')]
+
+#: Languages the profile does not want to be required to speak.
+EXTRA_LANGUAGES = {'french': 'French', 'francais': 'French', 'franzosisch': 'French',
+                   'italian': 'Italian', 'italiano': 'Italian', 'italienisch': 'Italian'}
+LANGUAGE_REQUIREMENT_CUES = ['required', 'require', 'requirement', 'mandatory', 'must',
+                             'fluent', 'fluency', 'proficiency', 'proficient', 'native',
+                             'erforderlich', 'zwingend', 'voraussetzung', 'verhandlungssicher',
+                             'muttersprache', 'flie', 'notwendig']
+LANGUAGE_WINDOW = 120
 
 
 def _hits(text, terms):
@@ -93,11 +112,14 @@ class MatchScorer:
             self._salary(job, profile),
             self._strategic(job, profile, blob),
         ]
+        # Advisories carry no points: they add "things to clarify" without
+        # letting an unpublished detail push a good job below the threshold.
+        advisories = self._advisories(job, profile, description)
 
         total = sum(p['points'] for p in parts)
         total = max(0, min(100, int(round(total))))
         reasons = [r for p in parts for r in p['reasons']]
-        concerns = [c for p in parts for c in p['concerns']]
+        concerns = [c for p in parts for c in p['concerns']] + advisories
         terms = []
         for p in parts:
             for term in p.get('terms', []):
@@ -128,15 +150,25 @@ class MatchScorer:
         wanted = {fold(x) for x in (profile.get('seniority_levels') or [])}
         if fold(detected) in wanted:
             return self._part('seniority', maximum, detected,
-                              reasons=['{0} level'.format(detected)])
+                              reasons=['{0} scope'.format(detected)])
+
+        # A title the profile lists as "also relevant" (Engineering Manager,
+        # Principal TPM, Platform Lead ...) is a real candidate, not a near
+        # miss.  The description decides the rest.
+        secondary = _hits(title, profile.get('secondary_titles') or [])
         own, best = TIER.get(detected, 0), max((TIER.get(x, 0) for x in
                                                 (profile.get('seniority_levels') or [])), default=3)
         if own >= best:
             return self._part('seniority', maximum * 0.8, detected,
-                              reasons=['{0} level (equivalent seniority)'.format(detected)])
+                              reasons=['{0} scope (equivalent seniority)'.format(detected)])
+        if secondary:
+            return self._part('seniority', maximum * 0.65, '{0} / {1}'.format(detected, secondary[0]),
+                              reasons=['{0} - a scope you explicitly accept'.format(secondary[0])],
+                              concerns=['confirm the actual scope and mandate of the role'],
+                              terms=secondary[:2])
         if own == best - 1:
             return self._part('seniority', maximum * 0.5, detected,
-                              reasons=['{0} level'.format(detected)],
+                              reasons=['{0} scope'.format(detected)],
                               concerns=['seniority one step below the target levels'])
         return self._part('seniority', maximum * 0.15, detected,
                           concerns=['title does not signal a Head / Director / Principal / Lead scope'])
@@ -193,8 +225,10 @@ class MatchScorer:
             reasons.append('Leadership / transformation scope: {0}'.format(', '.join(hits[:3])))
         else:
             concerns.append('no leadership or transformation responsibilities described')
-        if not _hits(blob, PEOPLE_LEADERSHIP_TERMS):
-            concerns.append('people leadership scope unclear')
+        # Matrix / technical / program leadership is fully relevant here, so it
+        # answers the "who do you lead?" question just as well as head count.
+        if not _hits(blob, PEOPLE_LEADERSHIP_TERMS) and not _hits(blob, MATRIX_LEADERSHIP_TERMS):
+            concerns.append('leadership scope unclear (neither team nor matrix leadership described)')
         return self._part('leadership', points, '{0} leadership signal(s)'.format(len(hits)),
                           reasons, concerns, hits[:3])
 
@@ -202,6 +236,7 @@ class MatchScorer:
         maximum = WEIGHTS['location']
         preferred = {fold(x) for x in (profile.get('allowed_locations') or [])}
         optional = {fold(x) for x in (profile.get('optional_locations') or [])}
+        tertiary = {fold(x) for x in (profile.get('tertiary_locations') or [])}
         city = fold(job.get('normalized_city') or '')
         model = job.get('work_model') or 'Unknown'
         reasons, concerns = [], []
@@ -213,6 +248,9 @@ class MatchScorer:
         elif city and city in optional:
             points = maximum * 0.8
             reasons.append('{0} (secondary location)'.format(job.get('normalized_city')))
+        elif city and city in tertiary:
+            points = maximum * 0.65
+            reasons.append('{0} (tertiary location)'.format(job.get('normalized_city')))
         elif job.get('switzerland_eligible'):
             points = maximum * 0.7
             reasons.append(job.get('normalized_city') or 'Switzerland')
@@ -239,24 +277,70 @@ class MatchScorer:
         return self._part('location', points, detail, reasons, concerns)
 
     def _salary(self, job, profile):
+        """Salary ranks; it does not decide.
+
+        Most Head / Director / Principal postings publish nothing.  Treating
+        that as a penalty would systematically hide exactly the roles this
+        profile is looking for, so a missing salary scores neutral-full and
+        only produces a "things to clarify" note.  A *published* figure that is
+        clearly below the range is the one case that costs real points.
+        """
         maximum = WEIGHTS['salary']
+        mode = (profile.get('salary_mode') or 'hard').lower()
         low, high = job.get('salary_min'), job.get('salary_max')
         currency = (job.get('salary_currency') or '').upper()
-        minimum = int(profile.get('minimum_salary_chf') or 0)
+
+        if mode == 'ignore':
+            return self._part('salary', maximum, 'salary not considered')
+
         if low is None and high is None:
-            return self._part('salary', maximum * 0.4, 'no salary published',
-                              concerns=['no published salary'])
+            # Never below the threshold just because nothing was published.
+            return self._part('salary', maximum, 'no salary published',
+                              concerns=['Compensation not published'])
+
         top = high if high is not None else low
         bottom = low if low is not None else high
         text = '{0}{1}'.format(int(top or 0), ' ' + currency if currency else '')
-        if minimum and currency == 'CHF':
-            if bottom is not None and bottom >= minimum:
-                return self._part('salary', maximum, text,
-                                  reasons=['Published salary reaches your target range'])
-            if top is not None and top < minimum:
-                return self._part('salary', 0, text,
-                                  concerns=['published salary is below your target range'])
+
+        if currency and currency != 'CHF':
+            return self._part('salary', maximum * 0.7, text,
+                              reasons=['Salary published ({0})'.format(text)],
+                              concerns=['published in {0} - not directly comparable to CHF'.format(currency)])
+
+        target = int(profile.get('salary_target_chf') or 0)
+        interesting = int(profile.get('minimum_salary_chf') or 0)
+        floor = int(profile.get('salary_floor_chf') or 0)
+
+        if floor and top is not None and top < floor:
+            # Substantial, explicit penalty - but the job is still listed unless
+            # salary was configured as a hard filter.
+            return self._part('salary', -12, text,
+                              concerns=['Published compensation ({0}) is clearly below your range'
+                                        .format(_chf(top))])
+        if target and bottom is not None and bottom >= target:
+            return self._part('salary', maximum, text,
+                              reasons=['Published salary reaches your target band'])
+        if interesting and top is not None and top >= interesting:
+            return self._part('salary', maximum * 0.8, text,
+                              reasons=['Published salary reaches your minimum expectation'])
+        if interesting and top is not None:
+            return self._part('salary', maximum * 0.4, text,
+                              concerns=['Published compensation ({0}) is below your expectation'
+                                        .format(_chf(top))])
         return self._part('salary', maximum * 0.7, text, reasons=['Salary published'])
+
+    # -- advisories (no points, only "things to clarify") ------------------
+    def _advisories(self, job, profile, description):
+        notes = []
+        limit = int(profile.get('hybrid_max_office_days') or 2)
+        model = job.get('work_model') or 'Unknown'
+        days = job.get('office_days')
+        if model in ('Hybrid', 'Onsite', 'Unknown') and days is None:
+            notes.append('Office presence not specified (potentially more than {0} onsite days)'
+                         .format(limit))
+        for language in _required_languages(description):
+            notes.append('Additional language requirement: {0}'.format(language))
+        return notes
 
     def _strategic(self, job, profile, blob):
         maximum = WEIGHTS['strategic']
@@ -266,3 +350,28 @@ class MatchScorer:
         concerns = [] if hits else ['no AI / automation angle mentioned']
         return self._part('strategic', points, '{0} strategic signal(s)'.format(len(hits)),
                           reasons, concerns, hits[:3])
+
+
+def _chf(value):
+    return "CHF {0:,.0f}".format(float(value)).replace(',', "'")
+
+
+def _required_languages(description):
+    """French / Italian that the posting states as a requirement.
+
+    Deliberately conservative: the language word has to sit next to a real
+    requirement cue.  A job that merely mentions a French-speaking office is
+    not flagged, and nothing here ever rejects a posting.
+    """
+    text = description or ''
+    found = []
+    for token, label in EXTRA_LANGUAGES.items():
+        if label in found:
+            continue
+        for match in re.finditer(r'(?<![a-z])' + re.escape(token) + r'(?![a-z])', text):
+            start = max(0, match.start() - LANGUAGE_WINDOW)
+            window = text[start:match.end() + LANGUAGE_WINDOW]
+            if any(cue in window for cue in LANGUAGE_REQUIREMENT_CUES):
+                found.append(label)
+                break
+    return found
