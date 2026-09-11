@@ -1,0 +1,57 @@
+.env.example
+  s_0f3fe20ac7e20f::t_eaa3500d613f2d 1-11
+.gitignore
+  s_0f3fe20ac7e20f::t_eaa3500d613f2d 1-36
+README.md
+  s_dd53c05de37c6b::t_e5a14836dcea21 1-128
+app.py
+  s_dd53c05de37c6b::t_69a3c4e1a17076 1-1264
+requirements.txt
+  s_dd53c05de37c6b::t_4ad57becee036d 1-9
+run.bat
+  s_dd53c05de37c6b::t_627b71806eb8a0 1-6
+run.py
+  s_dd53c05de37c6b::t_076eac95e31057 1-266
+start.command
+  s_357ecc95735833::t_257ec533e0d534 1-3
+start_windows.bat
+  s_357ecc95735833::t_93397b31d7ae2d 1-5
+static/app.js
+  s_357ecc95735833::t_c33583d1af4e2c 1-183
+static/index.html
+  s_357ecc95735833::t_efe676dfb7e886 1-221
+static/styles.css
+  s_357ecc95735833::t_d3b5cd3225041d 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "1f20230cb6d33f9c1748db54cccd9513b64ac7fd",
+  "prompts": {},
+  "sessions": {
+    "s_0f3fe20ac7e20f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cf4d57d-4700-4fc7-9166-967555e08027",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    },
+    "s_357ecc95735833": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "34194965-6530-442f-aff1-45697490b800",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    },
+    "s_dd53c05de37c6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d9109ba-00a1-49b4-a12f-d440fb2e412c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
