@@ -14,3 +14,88 @@
 .switch-line{display:flex;align-items:center;gap:7px;font-size:.9rem;color:var(--muted);white-space:nowrap}
 .source-add-form{border-top:1px solid var(--border);padding-top:16px}.source-add-form h3{margin:0 0 12px}.source-help{margin-top:12px;line-height:1.5}
 @media (max-width:680px){.source-row{grid-template-columns:1fr auto}.source-row .muted-action{grid-column:1/-1;justify-self:start}}
+
+/* ---------------------------------------------------------------
+   Swiss filtering rework: inline filter panel, match explanation,
+   score breakdown and the "why was this filtered" debug view.
+   --------------------------------------------------------------- */
+
+.filter-panel {
+  background: var(--panel, #fff);
+  border: 1px solid var(--border, #e3e6ef);
+  border-radius: 16px;
+  padding: 20px 22px;
+  margin: 18px 0;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+}
+.filter-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.filter-panel-head h3 { margin: 0 0 2px; font-size: 1.05rem; }
+.filter-panel-head p { margin: 0; font-size: .82rem; }
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px 18px;
+  margin-top: 16px;
+  align-items: start;
+}
+.filter-grid > label, .filter-block { display: flex; flex-direction: column; gap: 6px; font-size: .82rem; font-weight: 600; }
+.filter-grid > label small, .filter-block small { font-weight: 400; opacity: .7; }
+.filter-grid input, .filter-grid select, .filter-grid textarea {
+  font: inherit; font-weight: 400; padding: 8px 10px;
+  border: 1px solid var(--border, #d8dce8); border-radius: 9px; background: #fff; width: 100%;
+}
+.filter-grid textarea { resize: vertical; min-height: 62px; }
+/* Locations get their own full-width row so the first row of selects stays tidy. */
+.filter-grid .span-2 { grid-column: 1 / -1; }
+.filter-grid label.span-2 { max-width: 100%; }
+
+.filter-block {
+  border: 1px solid var(--border, #e3e6ef); border-radius: 12px; padding: 12px 14px; margin: 0;
+}
+.filter-block legend { font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; opacity: .7; padding: 0 4px; }
+.chip-checks { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chip-check {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  padding: 5px 10px; border: 1px solid var(--border, #d8dce8); border-radius: 999px;
+  font-size: .8rem; font-weight: 500; cursor: pointer; background: #fff;
+}
+.chip-check:has(input:checked) { border-color: #2f6fed; background: #eef3ff; color: #1b4bb8; }
+.filter-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+.filter-actions .spacer { flex: 1; }
+#saveFiltersBtn { letter-spacing: .04em; }
+
+/* --- match explanation on the job card --- */
+.match-block { display: flex; gap: 22px; flex-wrap: wrap; margin: 10px 0 4px; }
+.match-col { min-width: 190px; font-size: .82rem; }
+.match-col strong { display: block; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; opacity: .65; margin-bottom: 4px; }
+.match-col ul { list-style: none; margin: 0; padding: 0; }
+.match-col li { padding: 1px 0; }
+.match-col.concerns li { color: #a4560f; }
+
+.score-details { margin-top: 8px; font-size: .8rem; }
+.score-details summary { cursor: pointer; opacity: .75; }
+.score-bars { display: grid; gap: 6px; margin-top: 8px; }
+.score-bar { display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: 10px; font-size: .76rem; }
+.score-bar > div { background: #eef0f6; border-radius: 999px; height: 7px; overflow: hidden; }
+.score-bar i { display: block; height: 100%; background: #2f6fed; border-radius: 999px; }
+.score-bar small { opacity: .65; white-space: nowrap; }
+
+/* --- rejected / debug view --- */
+.rejected-panel {
+  border: 1px solid var(--border, #e3e6ef); border-radius: 14px;
+  padding: 14px 18px; margin: 18px 0 40px; background: var(--panel, #fff);
+}
+.rejected-panel > summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.rejected-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.rejected-list { display: grid; gap: 8px; max-height: 460px; overflow: auto; }
+.rejected-row {
+  display: grid; grid-template-columns: minmax(200px, 1fr) minmax(240px, 1.3fr);
+  gap: 12px; padding: 9px 12px; border: 1px solid var(--border, #eceef5);
+  border-radius: 10px; font-size: .82rem; align-items: start;
+}
+.rejected-row small { display: block; opacity: .65; font-size: .76rem; }
+.rejected-reason { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+@media (max-width: 720px) { .rejected-row { grid-template-columns: 1fr; } }
+
+.source-row small.muted { display: block; margin-top: 3px; max-width: 46ch; line-height: 1.35; }
+.scout-kpis article strong { font-variant-numeric: tabular-nums; }
