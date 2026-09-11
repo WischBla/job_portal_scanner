@@ -1,0 +1,9 @@
+# Job Portal Scanner + Application Tracker
+#
+# This project intentionally uses only the Python standard library.
+# There are no third-party dependencies to install.
+#
+# Running the following is therefore safe but does nothing:
+#     python3 -m pip install -r requirements.txt
+#
+# Requires: Python 3.8 or newer.
