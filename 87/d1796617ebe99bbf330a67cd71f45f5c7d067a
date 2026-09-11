@@ -1,0 +1,79 @@
+README.md
+  s_0f3fe20ac7e20f::t_0e265c892f6ffe 1,3-16,19,23-24,26-28,31-32,34,36-38,40-45,47-58,61-139,141-142,144-148,150,152,154-157,159-161,163-165,167-171,173-175,177-179,181,183-192,194-196,198,200-201,203-205,207-209,211-236,240-241,243-250,252-256,258,260-265,267-273,275-276,280-300,303-306
+app.py
+  s_0f3fe20ac7e20f::t_2334f94d6e4dfd 2-8,16-23,28,40-47,49-53,57-58,61-63,67-73,78,85-86,95,101,107,109-122,129-130,135,141-142,157-158,160-161,175,187,199,201-202,204,222-226,229-230,234-236,246-247,250-252,264-265,270,277-279,281,283,285-288,290-292,305-333,335-339,342,344-356,358,360,367-368,370-372,376-383,385-395,397-421,424-426,428-429,431-432,435,437-439,442-443,446,449-474,476,478-480,482,486,490-505,508-511,513-518,520-525,528,530-534,539-542,544,547-559,564-565,569-571,573-584,586-591,594-597,599,603-604,611,624-626
+jobscanner/__init__.py
+  s_0f3fe20ac7e20f::t_a8592246e47bf3 1-20
+jobscanner/db.py
+  s_0f3fe20ac7e20f::t_4bcfcb98a6d8b5 1-402
+jobscanner/filters.py
+  s_0f3fe20ac7e20f::t_fd5acb83582d73 1-193
+jobscanner/locations.py
+  s_0f3fe20ac7e20f::t_b31e8833da582c 1-664
+jobscanner/normalizer.py
+  s_0f3fe20ac7e20f::t_b5fd8ed97a2abd 1-144
+jobscanner/pipeline.py
+  s_0f3fe20ac7e20f::t_dbd87853f3e914 1-159
+jobscanner/profile.py
+  s_0f3fe20ac7e20f::t_191e64c6433e87 1-196
+jobscanner/repository.py
+  s_0f3fe20ac7e20f::t_37005ff358231e 1-243
+jobscanner/scoring.py
+  s_0f3fe20ac7e20f::t_7d6db719181137 1-268
+jobscanner/sources/__init__.py
+  s_0f3fe20ac7e20f::t_7d0fa2fef8c349 1-12
+jobscanner/sources/arbeitnow.py
+  s_0f3fe20ac7e20f::t_c9f3ecfe2f8ef3 1-46
+jobscanner/sources/base.py
+  s_0f3fe20ac7e20f::t_39ffe7d30a87e3 1-74
+jobscanner/sources/greenhouse.py
+  s_0f3fe20ac7e20f::t_e4ce987473ddeb 1-42
+jobscanner/sources/html_text.py
+  s_0f3fe20ac7e20f::t_0122e5e53203c5 1-27
+jobscanner/sources/jobicy.py
+  s_0f3fe20ac7e20f::t_dea5921ccf1cd2 1-48
+jobscanner/sources/lever.py
+  s_0f3fe20ac7e20f::t_a8a4efabc4702d 1-49
+jobscanner/sources/remotive.py
+  s_0f3fe20ac7e20f::t_a0b460357b571e 1-47
+jobscanner/sources/rss.py
+  s_0f3fe20ac7e20f::t_cc2e5bd826a78e 1-79
+start.command
+  s_0f3fe20ac7e20f::t_b93f88b47ea113 2-3,5
+start_windows.bat
+  s_0f3fe20ac7e20f::t_8e928ef97c21c7 2-3,5-6
+static/app.js
+  s_0f3fe20ac7e20f::t_eda163a314eb00 3-5,78-89,96-112,115-184,189-234,237-246,249-259,271,273,290-305,312,323,328,331
+static/index.html
+  s_0f3fe20ac7e20f::t_29d0eeebf50363 6,14,77,79,87-94,96-98,100,105-174,177,180-187,194,198-203
+static/styles.css
+  s_0f3fe20ac7e20f::t_dbd2eb80d433c5 17-101
+tests/helpers.py
+  s_0f3fe20ac7e20f::t_6e5c03bfaa5a2c 1-58
+tests/test_api.py
+  s_0f3fe20ac7e20f::t_4b806c0e26d0b5 1-212
+tests/test_filters.py
+  s_0f3fe20ac7e20f::t_980a962e4e25d8 1-123
+tests/test_locations.py
+  s_0f3fe20ac7e20f::t_4787de5d69c167 1-137
+tests/test_pipeline.py
+  s_0f3fe20ac7e20f::t_26d8eb644a8512 1-171
+tests/test_scoring.py
+  s_0f3fe20ac7e20f::t_2b8e2e20f6098c 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "87d1796617ebe99bbf330a67cd71f45f5c7d067a",
+  "prompts": {},
+  "sessions": {
+    "s_0f3fe20ac7e20f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cf4d57d-4700-4fc7-9166-967555e08027",
+        "model": "unknown"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
