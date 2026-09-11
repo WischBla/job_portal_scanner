@@ -1,0 +1,90 @@
+jobscanner/sources/jobicy.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-48
+jobscanner/scoring.py
+  s_0f3fe20ac7e20f::t_7ff417d7d23acf 1-68,71-72,77-149,154-176,178-189,191-263,265-268
+  s_0f3fe20ac7e20f::t_d5895768971c07 69-70,73-76,150-153,177,190,264
+jobscanner/profile.py
+  s_0f3fe20ac7e20f::t_3131ce9f6523d6 1-96,99-196
+  s_0f3fe20ac7e20f::t_9a59f194d46b2f 97-98
+jobscanner/sources/__init__.py
+  s_0f3fe20ac7e20f::t_42726c2a733da2 1-12
+tests/test_filters.py
+  s_0f3fe20ac7e20f::t_5eb6ad2fe0cacf 1-123
+jobscanner/__init__.py
+  s_0f3fe20ac7e20f::t_e00cc7f7545608 1-20
+jobscanner/sources/base.py
+  s_0f3fe20ac7e20f::t_42726c2a733da2 1-74
+static/app.js
+  s_0f3fe20ac7e20f::t_cc4a7bf4085af9 3-5,78-89,96-112,115-184,189-234,237-246,249-259,271,273,290-305,312,323,328,331
+jobscanner/sources/lever.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-49
+static/index.html
+  s_0f3fe20ac7e20f::t_39c737ab4ff0ef 6,14,77,79,87-94,96-98,100,105-174,177,180-187,194,198-203
+jobscanner/normalizer.py
+  s_0f3fe20ac7e20f::t_59fb356310ce3e 27-28
+  s_0f3fe20ac7e20f::t_4d995b281fcc4e 1-26,29-144
+jobscanner/pipeline.py
+  s_0f3fe20ac7e20f::t_7fb1bfe7b3f2b4 1-69,71-74,76-82,84-125,127,131,135-156,158-159
+  s_0f3fe20ac7e20f::t_9a82b6e2800734 70
+  s_0f3fe20ac7e20f::t_8e4a89abe75e77 75,83,126,128-130,132-134,157
+jobscanner/sources/greenhouse.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-42
+start_windows.bat
+  s_0f3fe20ac7e20f::t_77dfc1fa6f1f3f 2-3,5-6
+tests/test_pipeline.py
+  s_0f3fe20ac7e20f::t_93ddc7e5eeeb12 1-171
+jobscanner/repository.py
+  s_0f3fe20ac7e20f::t_9a82b6e2800734 182-191
+  s_0f3fe20ac7e20f::t_831b24e6f63bbd 1-104,106-136,138-140,142-143,145-157,181,192-243
+  s_0f3fe20ac7e20f::t_8e4a89abe75e77 105,137,141,144,158-180
+static/styles.css
+  s_0f3fe20ac7e20f::t_b9fc581215bb65 36,39,48-50,58
+  s_0f3fe20ac7e20f::t_41d75be762de36 17-35,37-38,40-47,51-57,59-101
+jobscanner/filters.py
+  s_0f3fe20ac7e20f::t_ac9d27acaf7684 1-10,18-23,29-95,100,102-193
+  s_0f3fe20ac7e20f::t_34a937d9d2d877 11-17,24-28,96-99,101
+tests/test_api.py
+  s_0f3fe20ac7e20f::t_1c5baf42abea10 1-212
+tests/helpers.py
+  s_0f3fe20ac7e20f::t_5eb6ad2fe0cacf 1-58
+jobscanner/sources/rss.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-79
+jobscanner/sources/arbeitnow.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-46
+jobscanner/locations.py
+  s_0f3fe20ac7e20f::t_65825340a71a2c 1-385,395-397,399-453,455-470,473-524,529-531,534-555,557-615,617-645,647-664
+  s_0f3fe20ac7e20f::t_8558fd3d32c371 386-394,398,454,471-472,525-528,532-533,556,616,646
+jobscanner/db.py
+  s_0f3fe20ac7e20f::t_84fa980f95a0f7 1-402
+jobscanner/sources/html_text.py
+  s_0f3fe20ac7e20f::t_42726c2a733da2 1-27
+tests/test_locations.py
+  s_0f3fe20ac7e20f::t_bfe2f69c92435f 1-137
+start.command
+  s_0f3fe20ac7e20f::t_77dfc1fa6f1f3f 2-3,5
+README.md
+  s_0f3fe20ac7e20f::t_413956e9e1003a 1,3-16,19,23-24,26-28,31-32,34,36-38,40-45,47-58,61-139,141-142,144-148,150,152,154-157,159-161,163-165,167-171,173-175,177-179,181,183-192,194-196,198,200-201,203-205,207-209,211-236,240-241,243-250,252-256,258,260-265,267-273,275-276,280-300,303-306
+app.py
+  s_0f3fe20ac7e20f::t_12a2c6adef7bf5 2-8,16-23,28,40-47,49-53,57-58,61-63,67-73,78,85-86,95,101,107,109-122,129-130,135,141-142,157-158,160-161,175,187,199,201-202,204,222-226,229-230,234-236,246-247,250-252,264-265,270,277-279,281,283,285-288,290-292,305-333,335-339,342,344-356,358,360,367-368,370-372,376-383,385-395,397-421,424-426,428-429,431-432,435,437-439,442-443,446,449-474,476,478-480,482,486,490-505,508-511,513-518,520-525,528,530-534,539-542,544,547-559,564-565,569-571,573-584,586-591,594-597,599,603-604,611,624-625
+  s_0f3fe20ac7e20f::t_479ca63573a2c3 626
+jobscanner/sources/remotive.py
+  s_0f3fe20ac7e20f::t_13d78ca4ebe99c 1-47
+tests/test_scoring.py
+  s_0f3fe20ac7e20f::t_a56d581929c1b8 1-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "ef647e3db404dc087465d663ed38253e3ebc1e47",
+  "prompts": {},
+  "sessions": {
+    "s_0f3fe20ac7e20f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9cf4d57d-4700-4fc7-9166-967555e08027",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
