@@ -1,0 +1,82 @@
+jobscanner/sources/__init__.py
+  s_e280a43b2eacd8::t_430bd05df28360 7-19,22-28,30-36
+static/index.html
+  s_e280a43b2eacd8::t_cf1b4dc4f80853 32
+jobscanner/normalizer.py
+  s_e280a43b2eacd8::t_7af2b755e00b3f 68-84,134
+README.md
+  s_e280a43b2eacd8::t_b8a31238fc0e78 79-131,298,305-306,326-334
+tests/test_scan_coverage.py
+  s_e280a43b2eacd8::t_04f2c533197e9b 1-213,216-265
+  s_e280a43b2eacd8::t_ed9354edb003e8 214-215
+jobscanner/db.py
+  s_e280a43b2eacd8::t_cbe0f5ae1a6657 28,321-323,335,341,348-353,356-364,366-381
+  s_e280a43b2eacd8::t_ed8295bc1f67ac 612,622-624,626,629-630
+  s_e280a43b2eacd8::t_664ad811b13040 299-320,460-473,477,524-526,530-565
+  s_e280a43b2eacd8::t_13fae3ff1444e4 478,566-611,613-621,625,627-628
+  s_e280a43b2eacd8::t_6a529f99ad5011 365
+  s_e280a43b2eacd8::t_29b3bc60d9f7d8 382,631-632
+jobscanner/sources/smartrecruiters.py
+  s_e280a43b2eacd8::t_4520cab9ade45a 1-134
+jobscanner/sources/base.py
+  s_e280a43b2eacd8::t_6137121d4e7697 3,8-13,40-49,67-68,72,77-88,94-133
+tests/test_sources.py
+  s_e280a43b2eacd8::t_2347095bcd322a 325-331
+  s_e280a43b2eacd8::t_ed8295bc1f67ac 508-536
+  s_e280a43b2eacd8::t_1c91edb0fbd9e9 1-324,332-507,537-551
+tests/test_watchlist.py
+  s_e280a43b2eacd8::t_2da51243e1e8c7 10,13-18,44-50,52-53,59-61
+jobscanner/sources/manual.py
+  s_e280a43b2eacd8::t_a288096fecef6f 1-27
+jobscanner/sources/structured_jobs.py
+  s_e280a43b2eacd8::t_a288096fecef6f 1-227
+jobscanner/sources/registry.py
+  s_e280a43b2eacd8::t_2347095bcd322a 128-133,136-139
+  s_e280a43b2eacd8::t_430bd05df28360 1-20,22-26,30-54,56-60,62-66,68-73,75-80,82-87,89-93,95-99,101-127,134-135,140-149,151-195
+  s_e280a43b2eacd8::t_7ede18ac8c588d 21,27-29,55,61,67,74,81,88,94,100,150
+jobscanner/pipeline.py
+  s_e280a43b2eacd8::t_66018eb171093d 5,15-22,28,30,34,36,69-146,161-162,164-168,175-176,180,203,218,220-222,225-226,237,241,249,251-255,257-284
+  s_e280a43b2eacd8::t_7af2b755e00b3f 33
+jobscanner/watchlist.py
+  s_e280a43b2eacd8::t_7bdc1fae333f1d 269,272-277,306
+  s_e280a43b2eacd8::t_4c98884d2567a4 1,4,7-24,30,34-35,54-56,85-97,102-106,109-110,152-154,156-176,178-206,209-217,219-220,223-227,229,236,241,251-268,270-271,278-305,307-309
+static/app.js
+  s_e280a43b2eacd8::t_57a3ffd01c1521 727-743,756-757,769-778,800,804-828,834-835,838-845,855-856
+  s_e280a43b2eacd8::t_cf1b4dc4f80853 169-182,214-216,218,227-246
+  s_e280a43b2eacd8::t_cc5f95be9e4874 247
+static/styles.css
+  s_e280a43b2eacd8::t_cf1b4dc4f80853 206-213
+tests/test_api_v2.py
+  s_e280a43b2eacd8::t_20b935e5a60bcf 201-202,205-269
+  s_e280a43b2eacd8::t_7fd105bc6fd74c 270
+jobscanner/sources/phenom.py
+  s_e280a43b2eacd8::t_4ed7f85c0a3814 1-138
+jobscanner/sources/amazon_jobs.py
+  s_e280a43b2eacd8::t_c097ec98c1807e 1-77
+jobscanner/api/config_api.py
+  s_e280a43b2eacd8::t_153ceceab16092 12,17,30-31,53-54,85-86,155,162-166,168,176-199
+tests/test_locations.py
+  s_e280a43b2eacd8::t_b21da9e10586fd 136-166,185-193
+  s_e280a43b2eacd8::t_b660cd6731d17d 167-184
+jobscanner/locations.py
+  s_e280a43b2eacd8::t_b660cd6731d17d 599-607,611
+  s_e280a43b2eacd8::t_4feadd852d27fc 240,248,279,292,294-295,298-302
+jobscanner/sources/successfactors.py
+  s_e280a43b2eacd8::t_7db483ce705f95 1-125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "ba7a7004b2f451403a11525cc79bccedbdbff835",
+  "prompts": {},
+  "sessions": {
+    "s_e280a43b2eacd8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "48a3657b-9a22-4e30-a727-0813fa43117d",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
