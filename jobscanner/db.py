@@ -7,20 +7,25 @@ safe and preserves existing application-tracker data.
 
 import json
 import os
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import presets as presets_mod
 from . import profile as profile_mod
+from . import schema_v2
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = BASE_DIR / 'data' / 'applications.db'
+DATA_DIR = BASE_DIR / 'data'
+DEFAULT_DB_PATH = DATA_DIR / 'app.db'
+#: V1 database of the original scanner.  It is adopted, never deleted.
+LEGACY_DB_PATH = DATA_DIR / 'applications.db'
 
 # Overridable for tests via set_db_path() or the JOB_TRACKER_DB env variable.
 _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def set_db_path(path):
@@ -41,8 +46,46 @@ def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
+def adopt_legacy_database():
+    """Carry the V1 database over to data/app.db on first V2 start.
+
+    The original file stays exactly where it is - it becomes the untouched
+    pre-migration copy of the user's data.
+    """
+    if _DB_PATH != DEFAULT_DB_PATH or _DB_PATH.exists() or not LEGACY_DB_PATH.exists():
+        return False
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(LEGACY_DB_PATH), str(_DB_PATH))
+    return True
+
+
+def backup_dir():
+    """Backups always live next to the database that is actually in use."""
+    return _DB_PATH.parent / 'backups'
+
+
+def backup_database(tag='migration', keep=15):
+    """Timestamped copy of the live database; returns the path or ''."""
+    if not _DB_PATH.exists():
+        return ''
+    target_dir = backup_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    target = target_dir / '{0}-{1}-{2}.db'.format(_DB_PATH.stem, tag, stamp)
+    shutil.copy2(str(_DB_PATH), str(target))
+    # Keep the folder from growing without bound; the newest copies are enough.
+    copies = sorted(target_dir.glob('*.db'), key=lambda p: p.stat().st_mtime, reverse=True)
+    for stale in copies[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return str(target)
+
+
 def connect():
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    adopt_legacy_database()
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
@@ -294,6 +337,7 @@ LEGACY_STATE_MAP = {
     'Neu': 'NEW',
     'Gesehen': 'SEEN',
     'Gemerkt': 'SAVED',
+    'Gespeichert': 'SAVED',
     'Ignoriert': 'IGNORED',
     'Übernommen': 'APPLIED',
     'Abgelaufen': 'EXPIRED',
@@ -363,6 +407,7 @@ def migrate(conn):
     _seed_presets(conn)
     _seed_watchlist(conn)
     _seed_profile(conn)
+    schema_v2.migrate_v2(conn, now_iso(), profile=load_profile(conn))
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
@@ -529,9 +574,22 @@ def _seed_profile(conn):
         ','.join(columns), ','.join('?' for _ in columns)), values)
 
 
-def init_db():
+def schema_version(conn):
+    row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+    try:
+        return int(row[0]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def init_db(backup=True):
+    """Open, back up (only when the schema actually changes) and migrate."""
+    existed = _DB_PATH.exists() or LEGACY_DB_PATH.exists()
     conn = connect()
     try:
+        current = schema_version(conn) if _table_exists(conn, 'schema_meta') else 0
+        if backup and existed and current != SCHEMA_VERSION:
+            backup_database('v{0}'.format(current or 'pre'))
         migrate(conn)
     finally:
         conn.close()

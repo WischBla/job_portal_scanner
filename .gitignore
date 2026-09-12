@@ -7,6 +7,10 @@ data/
 *.sqlite
 *.sqlite3
 
+# --- Personal documents (CV, letters, references, certificates) ---
+documents/*
+!documents/.gitkeep
+
 # --- Secrets / local configuration ---
 .env
 .env.*
@@ -27,10 +31,16 @@ env/
 .coverage
 htmlcov/
 
+# --- Playwright ---
+playwright-report/
+test-results/
+.playwright/
+
 # --- Editors / OS ---
 .DS_Store
 .idea/
 .vscode/
 *.swp
 
-# NOTE: schema + migrations live in jobscanner/migrations.py and are versioned.
+# NOTE: schema + migrations live in jobscanner/db.py and jobscanner/schema_v2.py
+# and are versioned. Personal data never is.

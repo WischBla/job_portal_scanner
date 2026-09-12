@@ -300,8 +300,13 @@ class PersistenceTests(unittest.TestCase):
             jsdb.apply_preset(conn, presets.RECOMMENDED_KEY)
         jsdb.init_db()
         with jsdb.connect() as conn:
-            self.assertEqual(conn.execute('SELECT status FROM applications').fetchone()[0],
-                             'Interview 1')
+            # V2 has a fixed pipeline, so the free-text label is mapped onto the
+            # closest stage - the row itself and its history survive untouched.
+            status, notes = conn.execute('SELECT status, notes FROM applications').fetchone()
+            self.assertEqual(status, 'Interview')
+            self.assertIn('Interview 1', notes)
+            self.assertEqual(conn.execute('SELECT company FROM applications').fetchone()[0],
+                             'Roche')
             self.assertEqual(conn.execute('SELECT state FROM discovered_jobs').fetchone()[0],
                              'SAVED')
 

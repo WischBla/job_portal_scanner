@@ -1,389 +1,275 @@
-# Swiss Job Scanner + Bewerbungs-Tracker
+# Job Assistant
 
-Eine lokale Web-App mit zwei Aufgaben:
+A personal job discovery and application assistant for **one user**: Sebastian Bierwisch.
 
-1. **Schweizer Jobs finden** — mehrere Portale abfragen, **lokal** hart filtern (Geografie,
-   Arbeitsmodell, Ausschlüsse) und die verbleibenden Stellen mit einem **erklärbaren**
-   Match-Score bewerten.
-2. **Bewerbungen verfolgen** — Treffer in die Bewerbungsliste übernehmen und Status,
-   Rückmeldungen, Interviews und Follow-ups dokumentieren.
+It finds senior technology leadership roles that can realistically be worked from
+Switzerland, explains why each one fits, estimates what it is likely to pay, helps
+fill in the application form, and tracks the applications that follow.
 
-Alle persönlichen Daten bleiben lokal in `data/applications.db` (SQLite). Keine Telemetrie,
-kein externer Login, keine Abhängigkeiten ausserhalb der Python-Standardbibliothek.
+There are no accounts, no tenants, no dashboards and no search forms. The
+application already knows the profile.
+
+```
+python3 run.py          ->  http://127.0.0.1:8765
+```
 
 ---
 
-## Start
+## Install
+
+Python 3.9 or newer.
 
 ```bash
-cd /pfad/zum/projekt
-python3 run.py
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium   # for the apply assistant
+.venv/bin/python run.py
 ```
 
-Die App läuft auf **http://127.0.0.1:8765** und öffnet den Browser automatisch.
-Beenden mit **Ctrl+C**. Voraussetzung: **Python 3.8 oder neuer** — sonst nichts.
+`run.py` migrates the database (backing it up first), creates the document
+folders, starts the server on `http://127.0.0.1:8765` and opens a browser.
+
+Playwright is optional. Without it everything works except the Apply button,
+which then tells you what to install.
+
+---
+
+## The four screens
+
+### Jobs (default)
+
+One button: **Scan for new jobs**. Below it, every relevant opportunity sorted by
+match score, then by recency. Each card shows:
+
+* the score and its classification - **Excellent** (80+), **Strong** (70+), **Review**
+* title, company, location, work model, posting age
+* **Why it matches** - at most 5 reasons
+* **Potential concerns** - at most 3
+* **Estimated compensation** - a CHF range with base / bonus / equity and a confidence
+* actions: Open job, Save, Apply, Analysis, Track application, Ignore
+
+No search box, no filters, no source configuration. All of that lives in Config.
+
+### Applications
+
+A simple pipeline: Preparation, Applied, Screening, Interview, Final, Offer,
+Rejected, Withdrawn. Each application keeps company, role, job URL, the match
+analysis, the salary estimate, contact, next action and next date, notes, the
+documents used, and a chronological activity timeline. Status changes write
+themselves into the timeline.
+
+### Profile
+
+Who Sebastian is: personal and contact data, LinkedIn, nationality and work
+authorisation, relocation, languages, availability and notice period,
+compensation expectations, career history, technical skills, leadership profile,
+target roles and target geography.
+
+Documents (CV DE/EN, motivation letter DE/EN, certificates, employment
+references) are stored **on disk** under `documents/`. SQLite keeps only the
+metadata and the path - never the file itself.
+
+### Config
+
+Everything complicated: Job Sources, Company Watchlist, Matching, AI, Salary
+Model, Application Automation, System.
+
+---
+
+## Matching
+
+Two stages, in a fixed order.
+
+**Stage 1 - deterministic hard rules** (`jobscanner/filters.py`). Nothing that
+fails here is ever scored or shown:
+
+* not confirmably Switzerland - Germany-only, Austria-only, France-only,
+  generic "Europe", "EMEA"
+* junior, intern, working student, apprentice, trainee, graduate programme
+* recruiter, HR, pure sales, marketing, helpdesk / first-level support and other
+  unrelated functions
+
+Every rejection is logged with a machine-readable code, so Config can explain
+where a scan's results went.
+
+**Stage 2 - relevance scoring** (`jobscanner/scoring.py`), 0-100:
+
+| Dimension | Points |
+|---|---|
+| Seniority / scope | 20 |
+| Role responsibility | 25 |
+| Technical domain | 20 |
+| Leadership / transformation | 15 |
+| Location / work model | 10 |
+| Compensation potential | 5 |
+| AI / strategic relevance | 5 |
+
+Matching is semantic rather than exact-title: "Head of Platform Reliability"
+scores on what the role *is*, not on whether the title is on a list. Repeated
+keywords are not rewarded - each term counts once.
+
+A missing salary or an unstated office-day policy produces a **concern**, never a
+rejection.
+
+### The built-in search profile
+
+Because there is one user, the criteria ship with the application:
+
+* **Geography** Switzerland only (strict). Zurich, Zug, Lucerne, Bern, Basel
+  preferred; St. Gallen, Schwyz, Aargau secondary; Lugano also considered. Other
+  Swiss cities still appear - they simply rank lower.
+* **Work model** Remote and hybrid preferred, max ~2 office days. Unknown office
+  policy is a concern, not a rejection.
+* **Seniority** Head of, Director, Senior Director, Principal, Global Lead,
+  Technology / Engineering / Operations / Transformation Lead, Senior Engineering
+  Manager, Principal and Senior TPM.
+* **Domains** Technology / Technical / Engineering Operations, Platform
+  Engineering, SRE, Reliability, Cloud, Infrastructure, DevOps, DevSecOps,
+  Technology and Engineering Transformation, Technical Program / Project
+  Management, Engineering Productivity, Developer Experience, AI Operations,
+  AIOps, AI Engineering, Automation, Technology Strategy.
+
+---
+
+## Compensation estimator
+
+`jobscanner/compensation.py` returns a **range**, in this priority order:
+
+1. an explicit salary in the posting (confidence **High**)
+2. locally stored market data for that company and role family (**Medium**)
+3. a role-family + seniority + Swiss location baseline (**Low**)
+4. optional AI commentary, added on top - it never replaces the numbers
+
+```
+Estimated TC:  CHF 260k-330k
+Base:          CHF 210k-240k
+Bonus:         CHF 30k-50k
+Equity/LTI:    possible
+Confidence:    Medium
+```
+
+No fake precision: when only the baseline applies the range is wide and the
+confidence says so. Sebastian's targets (minimum CHF 235-250k, target CHF
+280-350k+, Big Tech CHF 350k+) live in Profile and rank results; they never
+reject one.
+
+The market-data table is editable under Config → Salary Model.
+
+---
+
+## AI analysis (optional)
+
+The application is fully usable with AI switched off - deterministic matching and
+templates then fill every field the UI shows, and the source of each analysis is
+labelled.
+
+With a provider configured, the full job description and the profile are analysed
+and the result is stored per job, so reopening the Jobs page never issues a new
+request. It returns: fit summary, strongest matches, real gaps, seniority fit,
+recommended application angle, and salary commentary.
 
 ```bash
-python3 run.py --port 9000     # anderen Port verwenden
-python3 run.py --no-browser    # ohne automatisches Browser-Fenster
+export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY
 ```
 
-Unter Windows ggf. `python run.py`. `run.bat` / `start.command` / `start_windows.bat` sind
-optionale Doppelklick-Helfer und rufen intern nur `run.py` auf — erforderlich sind sie nicht.
+Then Config → AI → enable and pick the provider. **API keys are read from
+environment variables only.** They are never written to SQLite and never returned
+by the API - Config only ever reports whether a key is present.
 
-Tests:
+---
+
+## Apply assistant
+
+Clicking **Apply** opens the real application page in a controlled Chromium
+window and:
+
+1. detects the ATS - adapters for **Greenhouse**, **Lever**, **Workday** and
+   **SmartRecruiters**, plus a generic mapper
+2. reads every form control's label, name, id, placeholder and accessibility
+   attributes
+3. fills the objective facts from Profile: first name, last name, email, phone,
+   LinkedIn, city, country, nationality, work authorisation, notice period,
+   relocation
+4. attaches the CV, and the motivation letter when the form clearly asks for one
+5. **stops**
+
+### It never submits
+
+There is no code path in this application that submits an application. The submit
+control is located only so it can be reported and deliberately left alone; the
+browser window stays open for you to review everything and click Submit yourself.
+This is enforced by a test and cannot be switched off in Config.
+
+Subjective questions are never answered automatically. "Why this company?", "Why
+are you a good fit?", "Describe your leadership style", "Salary expectation",
+dropdowns, checkboxes and conditional follow-ups ("If yes, please specify ...")
+are all reported as **Review required**. Where AI is enabled you can ask for a
+suggested answer - you still write or approve it.
+
+---
+
+## Data
+
+Everything stays on this machine.
+
+```
+data/app.db            SQLite - the only database the app writes
+data/backups/          automatic copies, taken before every schema change
+documents/cv/
+documents/motivation/
+documents/references/
+documents/certificates/
+```
+
+`data/` and `documents/` are git-ignored. Personal documents and the database are
+never committed.
+
+### Migration from the previous version
+
+On first start the V1 database (`data/applications.db`) is **copied** to
+`data/app.db`; the original file is left exactly where it is, untouched, as your
+pre-migration copy. Every schema step is additive and guarded, and a timestamped
+backup is written to `data/backups/` before any schema change.
+
+Existing applications, events, discovered jobs, job states, sources and the
+company watchlist all survive. German status labels are mapped onto the V2
+pipeline (`Beworben` → `Applied`), with the original label preserved in the
+application's notes. Jobs scored by V1 are re-explained once with the current
+scorer so old and new cards read the same way.
+
+---
+
+## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .
+.venv/bin/python -m pytest tests -q      # 174 tests
+.venv/bin/python run.py --reload         # auto-reload
 ```
 
----
-
-## Filter-Architektur
-
-Die Reihenfolge ist verbindlich und an genau einer Stelle implementiert
-(`jobscanner/pipeline.py`):
-
-```
-Job-Portale / APIs
-        ↓  jobscanner/sources/*      (ein Adapter pro Portal)
-Rohdaten
-        ↓  jobscanner/normalizer.py  (+ locations.py)
-Normalisierte Jobs
-        ↓  Deduplizierung
-        ↓  jobscanner/filters.py     HARTE FILTER  ← hier endet alles Ungeeignete
-        ↓  jobscanner/scoring.py     Match-Score 0–100
-        ↓  Mindestscore + Sortierung
-        ↓  jobscanner/repository.py  Persistenz + Job-Status
-Ranked matching jobs → merken / ignorieren / bewerben → Bewerbungs-Tracker
-```
-
-Zwei Regeln, die das Design tragen:
-
-* **Quell-APIs entscheiden nie über die Relevanz.** Ein `geo=switzerland`-Parameter ist
-  reine Optimierung (weniger Download); die Entscheidung trifft immer der lokale Filter.
-* **Harte Filter laufen vor dem Scoring.** Ein Job aus München kann nicht „durchrutschen“,
-  weil er zufällig 78 Punkte erreicht — er wird gar nicht erst bewertet.
-
-### Standort-Normalisierung
-
-`jobscanner/locations.py` ist die einzige Stelle im Code, die „ist das die Schweiz?“
-beantworten darf. Jeder Job erhält:
-
-`raw_location`, `normalized_country`, `normalized_city`, `normalized_region`,
-`is_remote`, `is_hybrid`, `work_model`, `office_days`, `switzerland_eligible`,
-`location_confidence`.
-
-* **Primärquelle** ist das strukturierte Standortfeld.
-* **Schreibweisen** werden zusammengeführt: Zürich/Zuerich/Zurigo → Zurich,
-  Lucerne → Luzern, Genf/Genève → Geneva, Basle → Basel, CH/CHE → Switzerland.
-* **Kantonskürzel** (ZH, ZG, LU, BE, BS, BL, AG, SG, SZ, TI, GE, VD …) gelten nur als
-  *bestätigende* Evidenz, nie als alleiniger Beweis — „BE“ ist auch Belgien, „FR“ auch
-  Frankreich, „AG“ auch eine Rechtsform.
-* **Pauschale Regionen** (Europe, EU, EEA, EMEA, DACH, Benelux, Worldwide, Anywhere …)
-  sind **nicht** die Schweiz.
-* **Beschreibung als Sekundärevidenz:** Bei einer reinen Region wird der Freitext geprüft.
-  Akzeptiert wird nur eine explizite Aussage — ein Schweiz-Begriff *zusammen mit* einem
-  Eignungs-Hinweis (reside, located, based, candidates, eligible, work permit, office …).
-  „European“, „DACH“, „German speaking“, „Central Europe“ genügen nie.
-  Formulierungen wie „excluding Switzerland“ heben positive Evidenz wieder auf.
-  Solche Treffer erhalten `location_confidence = "medium"` und einen sichtbaren Hinweis.
-
-Akzeptiert: `Zurich, Switzerland`, `Zürich, Schweiz`, `Zug, CH`, `Bern`, `Switzerland`,
-`Remote Switzerland`, `Remote - Switzerland`, `Switzerland or Germany`,
-`Remote Europe` **plus** „must reside in Switzerland“ im Text.
-
-Abgelehnt: `Berlin`, `Munich`, `München`, `Deutschland`, `Remote Germany`, `Remote Europe`,
-`Remote EU`, `Europe`, `DACH`, `EMEA`, `Anywhere`, `Austria`, `France`, `Netherlands`.
-
-### Harte Filter
-
-| Code | Regel |
-| --- | --- |
-| `not_switzerland` | `country_mode = strict` und kein belegbarer Schweiz-Bezug |
-| `country_not_allowed` | Land steht nicht in `allowed_countries` |
-| `location_not_selected` | Konkrete Stadt ist nicht in den gewählten Standorten (landesweite/Remote-Stellen ohne Stadt bleiben zulässig) |
-| `onsite_outside_switzerland` | Onsite-Rolle ausserhalb der Schweiz im Strict-Modus |
-| `work_model` | Remote/Hybrid/Onsite im Profil deaktiviert |
-| `excluded_title` | Titel enthält einen Begriff aus `exclude_titles` |
-| `impossible_seniority` | Junior, Intern, Werkstudent, Trainee, Lehrstelle, Entry Level … |
-| `unrelated_function` | Andere Fachrichtung (Recruiting, HR, Finance, Legal, Design, Helpdesk …) |
-| `excluded_keyword` | Ausschlussbegriff im Titel ohne technischen Leadership-Bezug |
-| `missing_required_keyword` | Ein `required_keywords`-Eintrag fehlt |
-| `salary_below_minimum` / `missing_salary` | Gehaltsregeln |
-| `below_minimum_score` | Score unter `minimum_match_score` (nach dem Scoring) |
-
-Wichtig für falsch-positive Ausschlüsse: Begriffe wie *sales*, *marketing* oder *finance*
-werden nur dann als Ausschluss gewertet, wenn der Titel **kein** technisches Leadership-Signal
-enthält. „Head of Sales Engineering Operations“ bleibt drin, „Account Executive DACH“ nicht.
-Begriffe, die die Funktion selbst benennen (Recruiter, Graphic Designer, Helpdesk …), sind
-absolut — „Technical Recruiter“ ist trotzdem Recruiting.
-
-### Match-Score
-
-Gewichtung (Summe 100), implementiert in `jobscanner/scoring.py`:
-
-| Dimension | Punkte |
-| --- | --- |
-| Seniorität | 20 |
-| Rolle / Verantwortung | 25 |
-| Technische Domäne | 20 |
-| Leadership / Transformation | 15 |
-| Standort / Arbeitsmodell | 10 |
-| Gehaltsangabe | 5 |
-| Strategie / AI-Relevanz | 5 |
-
-Der Score ist **kein Titel-Matcher**: „Director, Technology Enablement“ oder
-„Head of Engineering Productivity“ punkten voll, obwohl der Titel nicht wörtlich im Profil
-steht. Jede Dimension liefert Punkte, eine Begründung und ggf. einen Vorbehalt. Die Job-Karte
-zeigt deshalb immer:
-
-```
-60 MATCH · Senior DevOps Engineer · Proton · Geneva, Switzerland · Onsite
-
-Starker Match                        Mögliche Einschränkungen
-+ Role area in title: DevOps         − title does not signal a Head / Director scope
-+ Technology match: DevOps, Cloud    − no published salary
-+ Geneva
-```
-
-Dazu eine ausklappbare **Score-Herleitung** mit Punkten pro Dimension.
-
-### „Warum Jobs gefiltert wurden“
-
-Unter der Trefferliste liegt eine standardmässig eingeklappte Debug-Ansicht mit den
-Ablehnungen des letzten Laufs, gruppiert nach Grund — inklusive Klartext wie
-*„Structured location names Germany, which is not Switzerland.“* oder
-*„Location ‚Remote Europe‘ is a blanket region. Region wording alone does not include Switzerland.“*
-
----
-
-## Empfohlenes Profil: „Sebastian - Swiss Leadership Search“
-
-Der Job Scout liefert ein fertiges, eingebautes Suchprofil mit. Es ist als **Recommended**
-markiert und beantwortet die Frage „welche Filter soll ich setzen?“ ein für alle Mal.
-
-| | |
-| --- | --- |
-| Land | Schweiz — **Strict Switzerland**, harter Filter |
-| Standorte | Tier 1 Zürich · Zug · Luzern · Bern · Basel, Tier 2 St. Gallen · Schwyz · Aargau, Tier 3 Lugano |
-| Standort-Modus | **ranking** — die Listen priorisieren, sie schliessen keinen Schweizer Job aus |
-| Arbeitsmodell | Remote + Hybrid + Onsite (Onsite nur in der Schweiz), max. 2 Bürotage |
-| Zielseniorität | Head of · Director · Senior Director · Principal · Global Lead · Senior Lead · Lead |
-| Ebenfalls erlaubt | Engineering Manager, (Principal/Senior) Technical Program Manager, Platform/SRE/Cloud Engineering Manager, … |
-| Mindestscore | **62** — bewusst nicht 75 / 80 / 82 |
-| Gehalt | **Ranking-Signal**, kein harter Filter; fehlende Angabe kostet keinen Punkt |
-| Sprachen | Deutsch, Englisch |
-| Sortierung | Best Match, danach Datum |
-
-Drei Prinzipien halten das Profil breit genug zum **Entdecken**:
-
-1. **Nur Geografie ist hart.** Titel, Standort-Tier, Gehalt und Bürotage sind Ranking- und
-   Klärungssignale — ein exzellenter Job verschwindet nie, weil der Arbeitgeber etwas nicht
-   veröffentlicht hat.
-2. **Kein Titel-Whitelisting.** „Director, Technology Enablement“, „Head of Engineering
-   Productivity“ oder „Principal Technical Program Manager“ punkten stark, ohne im
-   Vokabular zu stehen. Ein einzelnes überlappendes Wort verwirft nichts: *Head of Sales*
-   fliegt raus, *Head of Sales Engineering* bleibt.
-3. **Matrix- und Programmleitung zählen voll.** Disziplinarische Führung ist keine
-   Voraussetzung.
-
-**Bedienung** — der Job Scout zeigt oben nur noch die fünf Kennzahlen des aktiven Profils,
-alles Weitere liegt hinter **Advanced settings**:
-
-* `[ Use recommended profile ]` erscheint, solange eigene Einstellungen aktiv sind.
-* `[ RESTORE RECOMMENDED PROFILE ]` setzt nach Rückfrage auf das Preset zurück.
-* Jede manuelle Änderung macht das Profil wieder zu *deinem* Profil (`preset_key` wird leer).
-
-Ein **bestehendes Profil wird nie überschrieben**. Presets liegen in einer eigenen Tabelle
-(`search_presets`), das aktive Profil in `search_profile` — eine Aktualisierung der App
-verändert gespeicherte Filter also nicht.
-
----
-
-## Company Watchlist
-
-Unter **Company watchlist** liegen die beobachteten Unternehmen (Priorität A/B, aktiv/inaktiv,
-Karriereseite, letzter Scan). Vorbelegt sind u. a. Google, Microsoft, AWS, NVIDIA, UBS, SIX,
-Swiss Re, Roche, Novartis, ABB, Swisscom (Priorität A) sowie Meta, IBM, Red Hat, Zurich
-Insurance, PostFinance, Hitachi Energy, Siemens Switzerland, Zühlke, Adnovum, Avaloq,
-Scandit, Proton (Priorität B).
-
-Wird bei einem Eintrag ein **öffentliches, maschinenlesbares** Board hinterlegt
-(Greenhouse-Token, Lever-Site oder RSS-Feed), legt die Watchlist automatisch die passende
-Quelle in `job_sources` an und der Scan fragt sie mit ab. Andernfalls bleibt der Eintrag
-bewusst auf `manual` und bietet nur **Open careers page** — für Karriereseiten ohne
-offizielle Schnittstelle wird **kein HTML-Scraper** gebaut, weil er unbemerkt kaputtgeht.
-
----
-
-## Suchprofil
-
-Das Profil liegt in der Tabelle `search_profile` (genau eine Zeile). **SQLite ist die einzige
-Wahrheit** — das Frontend hält bewusst keine eigene Kopie, sondern liest nach jedem Speichern
-neu. Felder:
-
-`country_mode`, `allowed_countries`, `allowed_locations`, `optional_locations`,
-`tertiary_locations`, `location_filter_mode`, `remote_policy`, `hybrid_max_office_days`,
-`seniority_levels`, `secondary_titles`, `include_titles`, `exclude_titles`,
-`required_keywords`, `preferred_keywords`, `excluded_keywords`, `minimum_match_score`,
-`salary_mode`, `minimum_salary_chf`, `salary_target_chf`, `salary_floor_chf`,
-`allow_missing_salary`, `language_preferences`, `sources_enabled`, `sort_mode`,
-`auto_hours`, `preset_key`.
-
-Drei Felder steuern, **wie hart** ein Kriterium wirkt:
-
-| Feld | Werte | Bedeutung |
-| --- | --- | --- |
-| `location_filter_mode` | `ranking` · `hard` | `ranking`: bevorzugte Orte punkten nur. `hard`: Schweizer Jobs ausserhalb der Liste werden verworfen. |
-| `salary_mode` | `ranking` · `ignore` · `hard` | `ranking` (empfohlen): Gehalt rankt. `hard`: `minimum_salary_chf` wird zum harten Filter. |
-| `sort_mode` | `score` · `newest` · `company` · `location` | Standardsortierung der Ergebnisliste. |
-
-Eine **neue** Datenbank startet auf dem empfohlenen Preset. Eine **bestehende** behält ihr
-gespeichertes Profil unverändert (`preset_key` bleibt leer) und bekommt nur den Button
-`[ Use recommended profile ]` angeboten.
-
-Im Job Scout steht der Filterblock direkt auf der Seite. **SAVE FILTERS** speichert, zeigt
-„Filter erfolgreich gespeichert“ und lädt die gespeicherten Werte sofort neu; ein Reload oder
-Neustart zeigt exakt dieselben Werte, und der nächste Scan verwendet genau diese.
-
-API:
-
-| Methode | Pfad | Zweck |
-| --- | --- | --- |
-| `GET` | `/api/search-profile` | gespeichertes Profil lesen |
-| `PUT` | `/api/search-profile` | Profil speichern (validiert, vollständig) |
-| `POST` | `/api/scan` | Scan mit dem gespeicherten Profil starten |
-| `GET` | `/api/scout/jobs` | Treffer |
-| `GET` | `/api/scout/rejected` | Ablehnungen des letzten Laufs |
-| `GET` | `/api/scout/summary` | Lauf-Statistik und Zähler |
-| `PUT` | `/api/scout/jobs/{id}/state` | `NEW · SEEN · SAVED · IGNORED · APPLIED · EXPIRED` |
-| `POST` | `/api/scout/jobs/{id}/convert` | in den Bewerbungs-Tracker übernehmen |
-| `GET` | `/api/presets` | eingebaute Presets + aktuell aktives |
-| `POST` | `/api/presets/{key}/apply` | Preset ins aktive Profil kopieren |
-| `GET` · `POST` | `/api/watchlist` | Watchlist lesen / Unternehmen anlegen |
-| `PUT` · `DELETE` | `/api/watchlist/{id}` | Watchlist-Eintrag ändern / entfernen |
-
-`/api/scout/jobs` akzeptiert `?sort=score|newest|company|location`.
-`/api/scout/summary` liefert zusätzlich den Trichter (`funnel`: fetched → swiss_eligible →
-relevant → strong → excellent) und `rejection_groups`.
-`/api/scout/profile` bleibt als Alias erhalten.
-
----
-
-## Job-Status und Deduplizierung
-
-Jeder Treffer hat genau einen Status: `NEW`, `SEEN`, `SAVED`, `IGNORED`, `APPLIED`, `EXPIRED`.
-Von Hand gesetzte Status (`SAVED`, `IGNORED`, `APPLIED`) überleben jeden Rescan.
-
-Identität: **`source_type` + externe Job-ID**; fällt die weg, die bereinigte URL (ohne
-Tracking-Parameter), sonst Firma + Titel + Ort. Dieselbe Stelle aus zwei Portalen landet
-deshalb nur einmal in der Liste, und wiederholte Scans erzeugen keine Duplikate.
-
-Was ein erfolgreich abgefragtes Portal nicht mehr liefert **oder** was durch verschärfte
-Filter herausfällt, wird auf `EXPIRED` gesetzt und verschwindet aus der Liste. Ohne das
-würde eine Filter-Verschärfung scheinbar wirkungslos bleiben, weil alte Treffer liegen blieben.
-
----
-
-## Bewerbungs-Tracker
-
-**APPLY / In Bewerbungen** übernimmt Firma, Jobtitel, Standort, Quelle, Job-URL,
-Arbeitsmodell, Gehalt (falls bekannt), Match-Score samt Begründung und Fundtag in den
-Bewerbungsdatensatz. Startstatus ist **Vorbereitung** (= „Preparation“).
-
-Der Tracker behält seine deutschen Statusbezeichnungen, damit bestehende Datensätze gültig
-bleiben. Sie entsprechen 1:1 den Stufen aus der Aufgabenstellung:
-
-| Deutsch | Englisch |
-| --- | --- |
-| Vorbereitung | Preparation |
-| Beworben | Applied |
-| Eingangsbestätigung | (Acknowledged) |
-| Screening / HR | HR Screening |
-| Interview 1 / Interview 2 | Interview 1 / Interview 2 |
-| Case / Assessment | Assessment |
-| Final Interview | Final Interview |
-| Angebot | Offer |
-| On Hold | (On Hold) |
-| Abgelehnt | Rejected |
-| Zurückgezogen | Withdrawn |
-
----
-
-## Portale / Quellen
-
-Unter **Portale** lassen sich Quellen aktivieren, ergänzen und löschen. Standardmässig aktiv:
-Arbeitnow, Remotive, Jobicy.
-
-| Quelle | Upstream-Filter | Grenzen |
-| --- | --- | --- |
-| **Arbeitnow** | keiner | Board ist stark deutschlastig und bietet keinen Länderparameter; praktisch alles wird lokal verworfen. |
-| **Remotive** | nur Freitextsuche | Weltweites Remote-Board; `candidate_required_location` ist meist „Europe“ oder „Worldwide“ — ohne explizite Schweiz-Aussage im Text wird abgelehnt. |
-| **Jobicy** | `geo=switzerland` | Remote-only; die Schweiz-Abfrage liefert sehr wenige Stellen, `jobGeo` ist oft eine Region. |
-| **Greenhouse** | keiner | Liefert das ganze Board; Standortqualität hängt am Arbeitgeber. Board-Token eintragen. |
-| **Lever** | keiner | Wie Greenhouse; Standorte kommen aus dem Kategorie-Feld. Site-Name und Region eintragen. |
-| **RSS / Atom** | keiner | Feeds haben selten ein Standortfeld; der Adapter versucht den Ort aus dem Titel zu lesen („… (Zurich)“). |
-
-**Wichtig:** Die drei allgemeinen Remote-Boards enthalten kaum Schweizer Senior-Technology-
-Leadership-Stellen. Wer regelmässig Treffer sehen will, ergänzt gezielt Karriereseiten von
-Unternehmen mit Schweizer Standorten (Greenhouse-Board-Token oder Lever-Site). Zwei solche
-Quellen sind als Beispiel eingetragen (*Scandit Careers*, *Proton Careers*) und lassen sich
-unter **Portale** jederzeit deaktivieren oder löschen.
-
-LinkedIn und jobs.ch werden nicht über inoffizielle Scraper ausgelesen.
-
----
-
-## Datenbank
-
-`data/applications.db` wird nie gelöscht oder neu aufgebaut. Beim Start laufen idempotente
-Migrationen (`jobscanner/db.py`), die ausschliesslich additiv sind:
-
-* neue Tabellen `search_profile`, `rejected_jobs`, `schema_meta`, `search_presets`,
-  `company_watchlist`
-* neue Spalten in `discovered_jobs` (normalisierter Standort, Arbeitsmodell, Seniorität,
-  Score-Herleitung, `state`), in `scout_runs` (`geo_passed_count`) und in `search_profile`
-  (`salary_mode`, `location_filter_mode`, `sort_mode`, `preset_key`, `secondary_titles`,
-  `tertiary_locations`, `salary_target_chf`, `salary_floor_chf`)
-* Presets werden bei jedem Start aus dem Code aktualisiert — das **aktive** Profil in
-  `search_profile` wird dabei nie angefasst; die Watchlist wird nur einmal befüllt
-* Übernahme des alten Profils aus `job_search_profile` (Standorte, Ausschlüsse, Skills,
-  Zielrollen, Gehaltsgrenze) beim ersten Start
-* Übersetzung der alten Status (`Neu`, `Gemerkt`, `Ignoriert`, `Übernommen`) in `NEW`,
-  `SAVED`, `IGNORED`, `APPLIED`
-
-Die alte Tabelle `job_search_profile` bleibt unangetastet erhalten. Die Datenbank steht in
-`.gitignore` und wird nie committet.
-
-**Backup** exportiert Bewerbungen, Verlauf, Suchprofil, Quellen und gefundene Jobs als JSON.
-
----
-
-## Projektstruktur
-
-```
-run.py                    Start (Version prüfen, DB migrieren, Server, Browser)
-app.py                    HTTP-Schicht: Routing, JSON, statische Dateien
-jobscanner/
-  db.py                   Verbindung + idempotente Migrationen
-  presets.py              eingebaute Suchprofile (Sebastian - Swiss Leadership Search)
-  profile.py              kanonisches Suchprofil (Defaults, Validierung)
-  watchlist.py            Company Watchlist + Brücke zu job_sources
-  locations.py            LocationNormalizer — die Schweiz-Entscheidung
-  normalizer.py           Rohdaten → normalisierter Job
-  filters.py              HardFilter (vor dem Scoring)
-  scoring.py              MatchScorer (erklärbar, 0–100)
-  repository.py           Persistenz, Deduplizierung, Job-Status
-  pipeline.py             fetch → normalize → dedupe → filter → score → persist
-  sources/                ein Adapter pro Portal
-static/                   Frontend (index.html, app.js, styles.css)
-tests/                    unittest-Suite
-```
-
-## Datenschutz
-
-* Bewerbungsdaten und Historie: nur lokale SQLite-Datenbank.
-* Bei einer Jobsuche werden ausschliesslich öffentliche Stellen-Endpunkte aufgerufen.
-* Name, CV und Bewerbungsdaten werden nicht an die Jobquellen übertragen.
-* Keine Telemetrie, kein externer Login.
+| Module | Responsibility |
+|---|---|
+| `jobscanner/sources/` | one adapter per portal; they fetch, they never filter |
+| `jobscanner/normalizer.py` | raw payload → normalised job (location, work model, seniority, dedupe) |
+| `jobscanner/locations.py` | Swiss eligibility, cities, cantons, work model |
+| `jobscanner/filters.py` | stage 1 hard rules |
+| `jobscanner/scoring.py` | stage 2 explainable 0-100 score |
+| `jobscanner/pipeline.py` | fetch → normalise → dedupe → filter → score → persist |
+| `jobscanner/compensation.py` | compensation estimator |
+| `jobscanner/ai/` | optional provider abstraction + cache + template fallback |
+| `jobscanner/apply/` | Playwright assistant, ATS adapters, field mapping |
+| `jobscanner/person.py` | the personal profile |
+| `jobscanner/documents.py` | document metadata; files stay on disk |
+| `jobscanner/applications.py` | pipeline, timeline, linked documents |
+| `jobscanner/api/` | FastAPI routers |
+| `static/` | the frontend: one HTML file, one CSS file, one JS file |
+
+Stack: Python, FastAPI, SQLite, HTML, CSS, vanilla JavaScript, Playwright. No
+frontend framework - there is no technical need for one here.
+
+### Adding a job source
+
+Most useful results come from company career boards. Config → Job Sources → add
+one, for example Greenhouse with `{"board_token": "proton", "company": "Proton"}`
+or Lever with `{"site": "example", "region": "eu"}`. The public aggregator APIs
+(Arbeitnow, Remotive, Jobicy) carry very few Swiss leadership roles; each source
+documents its own limitations in the Config screen.
