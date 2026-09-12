@@ -198,8 +198,75 @@ class ProfileScreenTests(ApiTestCase):
 class ConfigScreenTests(ApiTestCase):
     def test_config_exposes_every_required_section(self):
         data = self.client.get('/api/config').json()
-        for key in ('sources', 'watchlist', 'matching', 'ai', 'benchmarks', 'settings', 'system'):
+        for key in ('sources', 'watchlist', 'watchlist_source_kinds', 'source_health',
+                    'matching', 'ai', 'benchmarks', 'settings', 'system'):
             self.assertIn(key, data)
+
+    def test_the_watchlist_carries_everything_its_table_renders(self):
+        entries = self.client.get('/api/config').json()['watchlist']
+        self.assertTrue(entries)
+        for entry in entries:
+            for key in ('company_name', 'priority', 'source_label', 'source_status',
+                        'job_count_last_scan', 'last_scan_at', 'career_url', 'automated'):
+                self.assertIn(key, entry, key)
+            self.assertIn(entry['source_status'],
+                          ('ACTIVE', 'MANUAL', 'UNAVAILABLE', 'ERROR'))
+
+    def test_a_manual_company_is_never_presented_as_being_scanned(self):
+        entries = {e['company_name']: e for e in self.client.get('/api/config').json()['watchlist']}
+        google = entries['Google']
+        self.assertEqual(google['source_status'], 'MANUAL')
+        self.assertEqual(google['source_label'], 'Manual')
+        self.assertEqual(google['action'], 'open_careers_page')
+        self.assertFalse(google['automated'])
+        self.assertTrue(google['career_url'])
+
+    def test_verified_companies_arrive_with_their_public_source_attached(self):
+        entries = {e['company_name']: e for e in self.client.get('/api/config').json()['watchlist']}
+        self.assertEqual(entries['Proton']['career_source_type'], 'greenhouse')
+        self.assertEqual(entries['Roche']['career_source_type'], 'phenom')
+        self.assertEqual(entries['Swiss Re']['career_source_type'], 'successfactors')
+        self.assertEqual(entries['Amazon Web Services / AWS']['career_source_type'], 'amazon_jobs')
+
+    def test_source_health_is_reported_per_kind_with_a_manual_row(self):
+        health = self.client.get('/api/config/source-health').json()
+        self.assertIn('sources', health)
+        self.assertIn('failures', health)
+        manual = next(k for k in health['sources'] if k['source_type'] == 'manual')
+        self.assertGreater(manual['companies'], 0)
+
+    def test_verifying_a_source_stores_the_outcome(self):
+        entries = {e['company_name']: e for e in self.client.get('/api/config').json()['watchlist']}
+        entry_id = entries['Google']['id']
+        result = self.client.post('/api/config/watchlist/{0}/verify'.format(entry_id)).json()
+        # Google is manual, so nothing is contacted and nothing is claimed.
+        self.assertEqual(result['entry']['source_status'], 'MANUAL')
+
+    def test_verifying_an_unknown_entry_is_a_404(self):
+        self.assertEqual(self.client.post('/api/config/watchlist/999999/verify').status_code, 404)
+
+    def test_a_company_can_be_added_with_a_public_source(self):
+        response = self.client.post('/api/config/watchlist', json={
+            'company_name': 'Example AG', 'priority': 'C',
+            'career_source_type': 'smartrecruiters',
+            'career_source_identifier': 'ExampleAG',
+            'career_url': 'https://example.test/careers'})
+        self.assertEqual(response.status_code, 200)
+        entry = next(e for e in response.json()['watchlist'] if e['company_name'] == 'Example AG')
+        self.assertEqual(entry['source_label'], 'SmartRecruiters')
+        # Attached is not the same as proven.
+        self.assertEqual(entry['source_status'], 'UNAVAILABLE')
+
+    def test_a_public_source_without_an_identifier_is_rejected(self):
+        response = self.client.post('/api/config/watchlist', json={
+            'company_name': 'Nope AG', 'career_source_type': 'greenhouse'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_an_unknown_source_kind_is_rejected(self):
+        response = self.client.post('/api/config/watchlist', json={
+            'company_name': 'Nope AG', 'career_source_type': 'linkedin',
+            'career_source_identifier': 'x'})
+        self.assertEqual(response.status_code, 400)
 
     def test_ai_is_off_by_default_and_never_returns_a_key(self):
         data = self.client.get('/api/config').json()

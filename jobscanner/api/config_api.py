@@ -9,12 +9,12 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..watchlist import CompanyWatchlist
+from ..watchlist import CompanyWatchlist, source_health
 from ..ai import service as ai_service
 from ..db import (backup_database, backup_dir, connect, get_db_path, load_profile,
                   now_iso, row_to_dict, save_profile)
 from ..settings import DEFAULT_SETTINGS, ai_status, load_settings, save_settings
-from ..sources import adapter_types, get_adapter
+from ..sources import adapter_types, get_adapter, kind_catalogue
 
 router = APIRouter(prefix='/api/config', tags=['config'])
 
@@ -27,6 +27,8 @@ class SourcePayload(BaseModel, extra='ignore'):
 
 
 class WatchlistPayload(BaseModel, extra='ignore'):
+    """``career_source_type`` is validated against the source registry."""
+
     company_name: str = ''
     priority: str = 'B'
     career_url: str = ''
@@ -48,6 +50,8 @@ def get_config():
             'sources': _sources(conn),
             'source_types': _source_types(),
             'watchlist': CompanyWatchlist(conn).list(),
+            'watchlist_source_kinds': kind_catalogue(),
+            'source_health': source_health(conn),
             'benchmarks': [row_to_dict(r) for r in conn.execute(
                 'SELECT * FROM salary_benchmarks ORDER BY company, seniority').fetchall()],
             'system': _system(conn),
@@ -78,6 +82,8 @@ def _sources(conn):
         except (TypeError, ValueError):
             row['config'] = {}
         row['enabled'] = bool(row['enabled'])
+        row['last_status'] = row.get('last_status') or ''
+        row['last_job_count'] = int(row.get('last_job_count') or 0)
     return rows
 
 
@@ -146,16 +152,20 @@ def create_watchlist(payload: WatchlistPayload):
             watch.create(payload.model_dump())
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        return {'watchlist': watch.list()}
+        return {'watchlist': watch.list(), 'source_health': source_health(conn)}
 
 
 @router.put('/watchlist/{entry_id}')
 def update_watchlist(entry_id: int, payload: dict):
     with connect() as conn:
         watch = CompanyWatchlist(conn)
-        if watch.update(entry_id, payload or {}) is None:
+        try:
+            updated = watch.update(entry_id, payload or {})
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if updated is None:
             raise HTTPException(404, 'Entry not found')
-        return {'watchlist': watch.list()}
+        return {'watchlist': watch.list(), 'source_health': source_health(conn)}
 
 
 @router.delete('/watchlist/{entry_id}')
@@ -163,7 +173,30 @@ def delete_watchlist(entry_id: int):
     with connect() as conn:
         watch = CompanyWatchlist(conn)
         watch.delete(entry_id)
-        return {'watchlist': watch.list()}
+        return {'watchlist': watch.list(), 'source_health': source_health(conn)}
+
+
+@router.post('/watchlist/{entry_id}/verify')
+def verify_watchlist_source(entry_id: int):
+    """Hit the company's real endpoint now and store what came back.
+
+    This is the only thing that can move an entry to ACTIVE: a guessed board
+    token that 404s or answers empty stays UNAVAILABLE / ERROR and says so.
+    """
+    with connect() as conn:
+        watch = CompanyWatchlist(conn)
+        entry = watch.verify(entry_id)
+        if entry is None:
+            raise HTTPException(404, 'Entry not found')
+        return {'entry': entry, 'watchlist': watch.list(),
+                'source_health': source_health(conn)}
+
+
+@router.get('/source-health')
+def get_source_health():
+    """Config -> Job Sources: coverage per source kind plus every failure."""
+    with connect() as conn:
+        return source_health(conn)
 
 
 # -- AI --------------------------------------------------------------------

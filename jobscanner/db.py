@@ -25,7 +25,7 @@ LEGACY_DB_PATH = DATA_DIR / 'applications.db'
 # Overridable for tests via set_db_path() or the JOB_TRACKER_DB env variable.
 _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def set_db_path(path):
@@ -296,10 +296,31 @@ CREATE TABLE IF NOT EXISTS company_watchlist (
 CREATE INDEX IF NOT EXISTS idx_watchlist_priority ON company_watchlist(priority, company_name);
 '''
 
-#: Seed list: (company, priority, career_source_type, identifier, careers URL).
-#: Every entry starts as ``manual`` on purpose - a company only gets an
-#: automated source when a real, public, machine-readable endpoint is known.
-#: No HTML scraping is implemented for any of them.
+# --- migration 007: per-source health so a broken integration is never silent ---
+SOURCE_HEALTH_COLUMNS = (
+    ('source_url', "TEXT NOT NULL DEFAULT ''"),
+    ('source_status', "TEXT NOT NULL DEFAULT 'MANUAL'"),
+    ('last_checked_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_error', "TEXT NOT NULL DEFAULT ''"),
+    ('job_count_last_scan', 'INTEGER NOT NULL DEFAULT 0'),
+)
+JOB_SOURCE_HEALTH_COLUMNS = (
+    ('last_status', "TEXT NOT NULL DEFAULT ''"),
+    ('last_checked_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_error', "TEXT NOT NULL DEFAULT ''"),
+    ('last_job_count', 'INTEGER NOT NULL DEFAULT 0'),
+)
+
+#: Marks a one-shot data migration as done, so it can correct seeded rows once
+#: without ever overwriting an edit the user made afterwards.
+SEED_MARKER_KEY = 'company_source_seed'
+SEED_MARKER_VALUE = '1'
+
+#: Seed list: (company, priority, careers URL).
+#: Every company starts as ``manual``; an automated source is attached below
+#: only where a real public endpoint was verified against the live service.
 WATCHLIST_SEED = [
     ('Google', 'A', 'https://www.google.com/about/careers/applications/jobs/results/?location=Switzerland'),
     ('Microsoft', 'A', 'https://jobs.careers.microsoft.com/global/en/search?lc=Switzerland'),
@@ -311,20 +332,53 @@ WATCHLIST_SEED = [
     ('UBS', 'A', 'https://jobs.ubs.com/'),
     ('SIX', 'A', 'https://www.six-group.com/en/company/careers.html'),
     ('Swiss Re', 'A', 'https://careers.swissre.com/'),
-    ('Zurich Insurance', 'B', 'https://www.zurich.com/careers'),
+    ('Zurich Insurance', 'A', 'https://www.careers.zurich.com/'),
     ('Swisscom', 'A', 'https://www.swisscom.ch/en/about/career.html'),
     ('PostFinance', 'B', 'https://www.postfinance.ch/en/about-us/jobs-career.html'),
     ('Roche', 'A', 'https://careers.roche.com/global/en'),
     ('Novartis', 'A', 'https://www.novartis.com/careers'),
     ('ABB', 'A', 'https://careers.abb/'),
-    ('Hitachi Energy', 'B', 'https://www.hitachienergy.com/careers'),
+    ('Hitachi Energy', 'A', 'https://www.hitachienergy.com/careers'),
     ('Siemens Switzerland', 'B', 'https://jobs.siemens.com/careers?location=Switzerland'),
     ('Zuehlke', 'B', 'https://www.zuehlke.com/en/careers'),
     ('Adnovum', 'B', 'https://www.adnovum.com/en/company/careers'),
     ('Avaloq', 'B', 'https://www.avaloq.com/careers'),
     ('Scandit', 'B', 'https://www.scandit.com/careers/'),
     ('Proton', 'B', 'https://proton.me/careers'),
+    # Priority C: Swiss technology employers that were added because a public
+    # endpoint could actually be verified, not because they were on the brief.
+    ('On', 'C', 'https://www.on.com/en-ch/careers'),
+    ('SonarSource', 'C', 'https://www.sonarsource.com/company/careers/'),
+    ('ANYbotics', 'C', 'https://www.anybotics.com/careers/'),
+    ('Nexthink', 'C', 'https://www.nexthink.com/careers'),
 ]
+
+#: company -> (source kind, identifier).  Each pair below was confirmed with a
+#: live request that returned real, current postings for that company on
+#: 2026-09-12.  Nothing is guessed: a token that 404s, answers empty or belongs
+#: to a different employer is not listed here, and the company stays MANUAL.
+#:
+#: Companies deliberately absent: Google, Microsoft, Meta, IBM and NVIDIA
+#: publish no stable public feed; UBS and Avaloq answer automated requests with
+#: HTTP 403 and must not be worked around; Swisscom, Zuehlke, Red Hat and
+#: Hitachi Energy are Workday-only, which the brief excludes as a discovery
+#: source; PostFinance, Novartis and Siemens render their result lists in the
+#: browser, so there is nothing server-side to read.
+VERIFIED_COMPANY_SOURCES = {
+    'Amazon Web Services / AWS': ('amazon_jobs', 'CHE'),
+    'Roche': ('phenom', 'https://careers.roche.com'),
+    'ABB': ('phenom', 'https://careers.abb'),
+    'Swiss Re': ('successfactors', 'https://careers.swissre.com'),
+    'SIX': ('successfactors', 'https://jobs.six-group.com'),
+    'Zurich Insurance': ('successfactors', 'https://www.careers.zurich.com'),
+    'Adnovum': ('successfactors', 'https://careers.adnovum.com'),
+    'Proton': ('greenhouse', 'proton'),
+    'Scandit': ('greenhouse', 'scandit'),
+    'On': ('greenhouse', 'onrunning'),
+    'SonarSource': ('lever', 'sonarsource'),
+    'ANYbotics': ('lever', 'anybotics'),
+    'Nexthink': ('smartrecruiters', 'Nexthink'),
+}
 
 DEFAULT_SOURCES = [
     ('Arbeitnow', 'arbeitnow', '{}', 1),
@@ -403,9 +457,25 @@ def migrate(conn):
     _add_column(conn, 'search_profile', 'sort_mode', "TEXT NOT NULL DEFAULT 'score'")
     _add_column(conn, 'search_profile', 'preset_key', "TEXT NOT NULL DEFAULT ''")
 
+    # -- company_watchlist / job_sources: source resolution + health --------
+    for column, ddl in SOURCE_HEALTH_COLUMNS:
+        _add_column(conn, 'company_watchlist', column, ddl)
+    for column, ddl in JOB_SOURCE_HEALTH_COLUMNS:
+        _add_column(conn, 'job_sources', column, ddl)
+    conn.execute("UPDATE company_watchlist SET source_status='MANUAL' "
+                 "WHERE source_status NOT IN ('ACTIVE','MANUAL','UNAVAILABLE','ERROR')")
+
+    # -- scout_runs: the scan summary the Jobs screen shows ------------------
+    _add_column(conn, 'scout_runs', 'companies_scanned', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'swiss_eligible_count', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'duplicate_count', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'source_failure_count', 'INTEGER NOT NULL DEFAULT 0')
+
     _seed_sources(conn)
     _seed_presets(conn)
     _seed_watchlist(conn)
+    _attach_verified_company_sources(conn)
+    _merge_duplicate_sources(conn)
     _seed_profile(conn)
     schema_v2.migrate_v2(conn, now_iso(), profile=load_profile(conn))
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
@@ -451,9 +521,113 @@ def _seed_watchlist(conn):
         conn.execute(
             '''INSERT OR IGNORE INTO company_watchlist
                  (company_name,enabled,priority,career_source_type,career_source_identifier,
-                  career_url,notes,last_scan_at,last_scan_status,created_at,updated_at)
-               VALUES (?,1,?,'manual','',?,'','','',?,?)''',
+                  career_url,notes,last_scan_at,last_scan_status,source_status,
+                  created_at,updated_at)
+               VALUES (?,1,?,'manual','',?,'','','','MANUAL',?,?)''',
             (company, priority, url, ts, ts))
+
+
+def _attach_verified_company_sources(conn):
+    """Attach the verified public endpoints - exactly once.
+
+    Run unconditionally this would fight the user: re-attaching a source they
+    detached, or resetting a priority they changed.  A marker in ``schema_meta``
+    makes it a one-shot data migration instead, so an existing database is
+    upgraded on the first start after this release and never touched again.
+
+    Only entries that are still untouched (``manual`` with no identifier) get a
+    source, and the seeded priority is only corrected while it still matches
+    what an earlier release seeded.
+    """
+    from .watchlist import CompanyWatchlist   # local: watchlist imports this module
+
+    done = conn.execute('SELECT value FROM schema_meta WHERE key=?',
+                        (SEED_MARKER_KEY,)).fetchone()
+    if done and str(done[0]) == SEED_MARKER_VALUE:
+        return
+
+    seeded_priorities = {name: priority for name, priority, _ in WATCHLIST_SEED}
+    watchlist = CompanyWatchlist(conn)
+    for entry in watchlist.list():
+        name = entry['company_name']
+        payload = {}
+        wanted_priority = seeded_priorities.get(name)
+        if wanted_priority and entry.get('priority') != wanted_priority:
+            payload['priority'] = wanted_priority
+        source = VERIFIED_COMPANY_SOURCES.get(name)
+        if source and entry.get('career_source_type') == 'manual' and \
+                not entry.get('career_source_identifier'):
+            payload['career_source_type'], payload['career_source_identifier'] = source
+        if payload:
+            watchlist.update(entry['id'], payload)
+
+    conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
+                 (SEED_MARKER_KEY, SEED_MARKER_VALUE))
+
+
+def _merge_duplicate_sources(conn):
+    """Fold a hand-made source into the watchlist entry that now owns that board.
+
+    Someone who added "Proton Careers" by hand before the watchlist could do it
+    would otherwise end up fetching the same Greenhouse board twice - once as
+    their own source and once as ``Watchlist - Proton``.  The older row wins so
+    the user's original entry (and its id) is what survives; the redundant one
+    is removed and the watchlist points at what is left.
+
+    Safe to run on every start: once there is nothing duplicated, it does
+    nothing.
+    """
+    from .sources import registry
+
+    owned = conn.execute(
+        'SELECT w.id AS watch_id, s.id AS source_id, s.source_type, s.config_json '
+        'FROM company_watchlist w JOIN job_sources s ON s.id = w.source_id').fetchall()
+    orphans = conn.execute(
+        'SELECT id, source_type, config_json FROM job_sources '
+        'WHERE id NOT IN (SELECT source_id FROM company_watchlist WHERE source_id IS NOT NULL)'
+    ).fetchall()
+    if not owned or not orphans:
+        return
+
+    def identity(source_type, config_json):
+        try:
+            kind = registry.get_kind(source_type)
+        except Exception:       # noqa: BLE001 - an aggregator has no identity field
+            return None
+        if not kind.identity_field:
+            return None
+        try:
+            config = json.loads(config_json or '{}')
+        except (TypeError, ValueError):
+            return None
+        value = str(config.get(kind.identity_field) or '').strip().rstrip('/').casefold()
+        return (source_type, value) if value else None
+
+    by_identity = {}
+    for row in orphans:
+        key = identity(row['source_type'], row['config_json'])
+        if key and key not in by_identity:
+            by_identity[key] = row['id']
+
+    merged = []
+    for row in owned:
+        key = identity(row['source_type'], row['config_json'])
+        orphan_id = by_identity.get(key)
+        if orphan_id is None or orphan_id == row['source_id']:
+            continue
+        keep, drop = sorted((orphan_id, row['source_id']))
+        conn.execute('UPDATE company_watchlist SET source_id=? WHERE id=?', (keep, row['watch_id']))
+        conn.execute('DELETE FROM job_sources WHERE id=?', (drop,))
+        by_identity.pop(key, None)
+        merged.append(row['watch_id'])
+    if not merged:
+        return
+
+    # Re-sync so the surviving row reads as the watchlist source it now is.
+    from .watchlist import CompanyWatchlist
+    watchlist = CompanyWatchlist(conn)
+    for watch_id in merged:
+        watchlist.update(watch_id, {})
 
 
 def load_presets(conn):

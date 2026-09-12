@@ -7,9 +7,15 @@ from jobscanner import db as jsdb
 from jobscanner.watchlist import CompanyWatchlist
 from tests.helpers import TempDatabase
 
+#: The brief's priority A list, verbatim.
 PRIORITY_A = {
     'Google', 'Microsoft', 'Amazon Web Services / AWS', 'NVIDIA', 'UBS', 'SIX',
-    'Swiss Re', 'Roche', 'Novartis', 'ABB', 'Swisscom',
+    'Swiss Re', 'Zurich Insurance', 'Swisscom', 'Roche', 'Novartis', 'ABB',
+    'Hitachi Energy',
+}
+PRIORITY_B = {
+    'Meta', 'IBM', 'Red Hat', 'PostFinance', 'Siemens Switzerland', 'Zuehlke',
+    'Adnovum', 'Avaloq', 'Scandit', 'Proton',
 }
 
 
@@ -35,16 +41,24 @@ class WatchlistSeedTests(unittest.TestCase):
         for company in PRIORITY_A:
             self.assertEqual(by_name[company]['priority'], 'A', company)
 
-    def test_every_other_seeded_company_is_priority_b(self):
+    def test_priority_b_companies_are_marked_b(self):
+        by_name = {e['company_name']: e for e in self.entries()}
+        for company in PRIORITY_B:
+            self.assertEqual(by_name[company]['priority'], 'B', company)
+
+    def test_extra_companies_are_priority_c(self):
+        """Companies added for coverage never outrank the ones on the brief."""
         for entry in self.entries():
-            if entry['company_name'] not in PRIORITY_A:
-                self.assertEqual(entry['priority'], 'B', entry['company_name'])
+            if entry['company_name'] not in PRIORITY_A | PRIORITY_B:
+                self.assertEqual(entry['priority'], 'C', entry['company_name'])
 
     def test_every_entry_carries_the_fields_the_brief_asks_for(self):
         for entry in self.entries():
             for field in ('company_name', 'enabled', 'priority', 'career_source_type',
                           'career_source_identifier', 'career_url', 'last_scan_at',
-                          'last_scan_status'):
+                          'last_scan_status', 'source_url', 'source_status',
+                          'last_checked_at', 'last_success_at', 'last_error',
+                          'job_count_last_scan'):
                 self.assertIn(field, entry, field)
 
     def test_companies_without_a_machine_readable_source_only_offer_a_link(self):

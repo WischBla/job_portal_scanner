@@ -237,7 +237,7 @@ FOREIGN_COUNTRY_ALIASES = {
 # Foreign cities.  Only needed to *reject* confidently; a missing city here
 # simply means the job stays "unknown" rather than being wrongly accepted.
 FOREIGN_CITY_ALIASES = {
-    'Germany': ['berlin', 'munich', 'munchen', 'muenchen', 'frankfurt', 'hamburg', 'cologne',
+    'Germany': ['bochum', 'duisburg', 'wuppertal', 'gelsenkirchen', 'monchengladbach', 'moenchengladbach', 'chemnitz', 'kiel', 'halle', 'magdeburg', 'krefeld', 'luebeck', 'lubeck', 'oberhausen', 'rostock', 'erfurt', 'jena', 'paderborn', 'siegen', 'heilbronn', 'boblingen', 'boeblingen', 'sindelfingen', 'ratingen', 'eschborn', 'unterfoehring', 'unterfohring', 'garching', 'friedrichshafen', 'berlin', 'munich', 'munchen', 'muenchen', 'frankfurt', 'hamburg', 'cologne',
                 'koln', 'koeln', 'stuttgart', 'dusseldorf', 'duesseldorf', 'leipzig', 'dresden',
                 'nuremberg', 'nurnberg', 'nuernberg', 'hannover', 'hanover', 'bremen', 'essen',
                 'dortmund', 'bonn', 'karlsruhe', 'mannheim', 'mainz', 'wiesbaden', 'augsburg',
@@ -245,7 +245,7 @@ FOREIGN_CITY_ALIASES = {
                 'braunschweig', 'regensburg', 'wurzburg', 'wuerzburg', 'potsdam', 'darmstadt',
                 'erlangen', 'freiburg im breisgau', 'walldorf', 'ingolstadt', 'wolfsburg'],
     'Austria': ['vienna', 'wien', 'graz', 'linz', 'salzburg', 'innsbruck', 'klagenfurt'],
-    'France': ['paris', 'lyon', 'marseille', 'toulouse', 'lille', 'nice', 'bordeaux',
+    'France': ['annecy', 'rennes', 'nancy', 'metz', 'dijon', 'tours', 'orleans', 'angers', 'clermont-ferrand', 'aix-en-provence', 'sophia-antipolis', 'valbonne', 'paris', 'lyon', 'marseille', 'toulouse', 'lille', 'nice', 'bordeaux',
                'strasbourg', 'nantes', 'montpellier', 'grenoble', 'sophia antipolis'],
     'Italy': ['milan', 'milano', 'mailand', 'rome', 'roma', 'turin', 'torino', 'bologna',
               'florence', 'firenze', 'naples', 'napoli', 'venice', 'genoa'],
@@ -276,7 +276,7 @@ FOREIGN_CITY_ALIASES = {
     'Slovenia': ['ljubljana', 'maribor'],
     'Slovakia': ['bratislava', 'kosice'],
     'Turkey': ['istanbul', 'ankara', 'izmir'],
-    'United States': ['new york', 'san francisco', 'seattle', 'austin', 'boston', 'chicago',
+    'United States': ['san mateo', 'sunnyvale', 'santa clara', 'redmond', 'bellevue', 'cupertino', 'menlo park', 'redwood city', 'arlington', 'herndon', 'reston', 'irvine', 'san antonio', 'columbus', 'minneapolis', 'salt lake city', 'pittsburgh', 'charlotte', 'tampa', 'orlando', 'new york', 'san francisco', 'seattle', 'austin', 'boston', 'chicago',
                       'los angeles', 'denver', 'atlanta', 'miami', 'dallas', 'houston',
                       'san jose', 'palo alto', 'mountain view', 'washington dc', 'philadelphia',
                       'phoenix', 'portland', 'san diego', 'raleigh', 'nashville', 'detroit'],
@@ -289,13 +289,17 @@ FOREIGN_CITY_ALIASES = {
     'South Korea': ['seoul'],
     'Australia': ['sydney', 'melbourne', 'brisbane', 'perth', 'canberra'],
     'New Zealand': ['auckland', 'wellington'],
-    'Israel': ['tel aviv', 'jerusalem', 'haifa'],
+    'Israel': ['herzliya', 'tel aviv', 'jerusalem', 'haifa'],
     'United Arab Emirates': ['dubai', 'abu dhabi'],
-    'Brazil': ['sao paulo', 'rio de janeiro'],
-    'Mexico': ['mexico city', 'guadalajara'],
+    'Brazil': ['belo horizonte', 'sao paulo', 'rio de janeiro'],
+    'Mexico': ['monterrey', 'mexico city', 'guadalajara'],
     'Argentina': ['buenos aires'],
     'South Africa': ['cape town', 'johannesburg'],
-    'Philippines': ['manila', 'cebu'],
+    'Philippines': ['taguig', 'manila', 'cebu'],
+    'Vietnam': ['ho chi minh city', 'hanoi', 'da nang'],
+    'Malaysia': ['kuala lumpur', 'penang'],
+    'Indonesia': ['jakarta'],
+    'Thailand': ['bangkok'],
 }
 
 # Blanket region terms.  "Europe", "EU", "EMEA" and "DACH" are explicitly NOT
@@ -592,10 +596,19 @@ class LocationNormalizer:
         elif swiss_cities:
             region = None
 
+        # A multi-country posting ("Baden, Aargau, Switzerland | Krakow, Poland")
+        # is eligible because of its Swiss option, so the city shown must be the
+        # Swiss one.  When no Swiss city was recognised it is left empty and the
+        # UI falls back to the raw location - naming the foreign city instead
+        # would tell the reader the job is somewhere it is not.
+        city = (swiss_cities or [None])[0]
+        if city is None and not eligible:
+            city = (foreign_cities or [None])[0]
+
         return LocationVerdict(
             raw_location=str(raw_location or '').strip(),
             normalized_country=country,
-            normalized_city=(swiss_cities or foreign_cities or [None])[0],
+            normalized_city=city,
             normalized_region=region,
             is_remote=model['is_remote'],
             is_hybrid=model['is_hybrid'],

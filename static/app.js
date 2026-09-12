@@ -166,6 +166,20 @@ function escapeHtml(value) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/* Timestamps in Config are for orientation, not forensics: "today" beats an
+   ISO string nobody reads. */
+function shortStamp(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const stamp = new Date(text.replace(' ', 'T'));
+  if (isNaN(stamp.getTime())) return text.slice(0, 16).replace('T', ' ');
+  const days = Math.floor((Date.now() - stamp.getTime()) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 30) return days + ' days ago';
+  return stamp.toISOString().slice(0, 10);
+}
+
 async function loadJobs() {
   const data = await api('/api/jobs');
   state.jobs = data.jobs;
@@ -197,17 +211,38 @@ async function scan() {
   $('#scan-status').textContent = 'Scanning Swiss sources...';
   try {
     const result = await api('/api/scan', { method: 'POST' });
-    const bits = [result.matched_count + ' relevant', result.new_count + ' new',
-      result.rejected_count + ' filtered out'];
-    if (result.errors && result.errors.length) bits.push(result.errors.length + ' source error(s)');
-    $('#scan-status').textContent = bits.join(', ');
+    $('#scan-status').textContent = result.matched_count + ' relevant, ' +
+      result.new_count + ' new' +
+      (result.source_failure_count ? ', ' + result.source_failure_count + ' source failure(s)' : '');
     await loadJobs();
+    renderScanSummary(result);
   } catch (err) {
     $('#scan-status').textContent = '';
     toast(err.message, true);
   } finally {
     button.disabled = false;
   }
+}
+
+/* What the last scan actually did. Seven numbers, not a dashboard. */
+function renderScanSummary(result) {
+  const rows = [
+    ['Sources scanned', result.sources_scanned],
+    ['Companies scanned', result.companies_scanned],
+    ['Jobs fetched', result.fetched_count],
+    ['Swiss eligible', result.swiss_eligible_count],
+    ['Relevant', result.matched_count],
+    ['New', result.new_count],
+    ['Source failures', result.source_failure_count],
+  ];
+  const node = clear($('#scan-summary'));
+  node.hidden = false;
+  node.appendChild(el('table', {}, [el('tbody', {}, rows.map(([label, value]) =>
+    el('tr', {}, [el('td', { text: label + ':' }), el('td', { text: String(value === undefined ? 0 : value) })])))]));
+  (result.errors || []).forEach((error) => {
+    node.appendChild(el('div', { class: 'scan-failure',
+      text: error.source + ' - ' + error.error }));
+  });
 }
 
 async function showAnalysis(job) {
@@ -689,6 +724,23 @@ async function loadConfig() {
     el('fieldset', {}, [el('legend', { text: title })].concat(content)));
 
   /* -- Job Sources -- */
+  const health = data.source_health || { sources: [], failures: [] };
+  const healthRows = health.sources.map((kind) => el('tr', {}, [
+    el('td', { text: kind.label }),
+    el('td', { text: kind.companies + (kind.companies === 1 ? ' company' : ' companies') }),
+    el('td', { text: kind.status }),
+    el('td', { class: 'muted', text: shortStamp(kind.last_success_at) || '-' }),
+    el('td', { text: kind.jobs_returned ? String(kind.jobs_returned) : '-' }),
+  ]));
+  // A broken integration is never silent: every failure is listed by name.
+  const failureRows = health.failures.map((f) => el('tr', {}, [
+    el('td', { text: f.company || f.source }),
+    el('td', { text: f.status === 'ERROR' ? 'Source error' : 'No postings returned' }),
+    el('td', { class: 'muted', text: f.error || '-' }),
+    el('td', { class: 'muted', text: f.last_success_at
+      ? 'Last successful scan: ' + shortStamp(f.last_success_at) : 'Never scanned successfully' }),
+  ]));
+
   const sourceRows = data.sources.map((source) => el('tr', {}, [
     el('td', { text: source.name }),
     el('td', { text: source.source_type }),
@@ -701,6 +753,8 @@ async function loadConfig() {
       });
       return box;
     })()]),
+    el('td', { text: source.last_status || '-' }),
+    el('td', { text: source.last_job_count ? String(source.last_job_count) : '-' }),
     el('td', { class: 'muted', text: JSON.stringify(source.config) }),
     el('td', { class: 'actions' }, [el('button', { class: 'small ghost danger', text: 'Remove',
       onclick: async () => { await api('/api/config/sources/' + source.id, { method: 'DELETE' }); loadConfig(); } })]),
@@ -712,7 +766,16 @@ async function loadConfig() {
   ]);
   section('Job Sources', [
     el('table', {}, [
-      el('thead', {}, [el('tr', {}, ['Name', 'Type', 'Enabled', 'Config', ''].map((h) => el('th', { text: h })))]),
+      el('thead', {}, [el('tr', {}, ['Source', 'Companies', 'Status', 'Last successful scan', 'Jobs returned']
+        .map((h) => el('th', { text: h })))]),
+      el('tbody', {}, healthRows),
+    ]),
+    failureRows.length ? el('h3', { text: 'Failures' }) : null,
+    failureRows.length ? el('table', {}, [el('tbody', {}, failureRows)]) : null,
+    el('h3', { text: 'Configured sources' }),
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, ['Name', 'Type', 'Enabled', 'Last scan', 'Jobs', 'Config', '']
+        .map((h) => el('th', { text: h })))]),
       el('tbody', {}, sourceRows),
     ]),
     newSource,
@@ -734,20 +797,52 @@ async function loadConfig() {
   ]);
 
   /* -- Company Watchlist -- */
+  const kinds = data.watchlist_source_kinds || [{ type: 'manual', label: 'Manual' }];
   const watchRows = data.watchlist.map((entry) => el('tr', {}, [
     el('td', { text: entry.company_name }),
     el('td', { text: entry.priority }),
-    el('td', {}, [entry.career_url ? el('a', { href: entry.career_url, target: '_blank', text: 'careers' }) : null]),
-    el('td', { class: 'actions' }, [el('button', { class: 'small ghost danger', text: 'Remove',
-      onclick: async () => { await api('/api/config/watchlist/' + entry.id, { method: 'DELETE' }); loadConfig(); } })]),
+    el('td', { text: entry.source_label }),
+    // MANUAL means "not scanned" and says so; it never looks like a live source.
+    el('td', { text: entry.source_status }),
+    el('td', { text: entry.automated && entry.job_count_last_scan
+      ? String(entry.job_count_last_scan) : '-' }),
+    el('td', { class: 'muted', text: shortStamp(entry.last_scan_at) || '-' }),
+    el('td', { class: 'actions' }, [
+      entry.career_url ? el('a', { class: 'small ghost', href: entry.career_url,
+        target: '_blank', text: 'Open careers page' }) : null,
+      entry.automated ? el('button', { class: 'small ghost', text: 'Check source',
+        onclick: async (event) => {
+          const button = event.target;
+          button.disabled = true;
+          button.textContent = 'Checking...';
+          try {
+            const result = await api('/api/config/watchlist/' + entry.id + '/verify', { method: 'POST' });
+            toast(entry.company_name + ': ' + result.entry.source_status +
+              (result.entry.last_error ? ' - ' + result.entry.last_error : ''),
+              result.entry.source_status !== 'ACTIVE');
+            loadConfig();
+          } catch (err) { toast(err.message, true); button.disabled = false; }
+        } }) : null,
+      el('button', { class: 'small ghost danger', text: 'Remove',
+        onclick: async () => { await api('/api/config/watchlist/' + entry.id, { method: 'DELETE' }); loadConfig(); } }),
+    ]),
   ]));
   const newWatch = el('div', { class: 'grid3' }, [
     field('Company', input('company_name', '')),
     field('Priority', selectBox('priority', 'B', ['A', 'B', 'C'])),
     field('Careers URL', input('career_url', '')),
+    field('Source', selectBox('career_source_type', 'manual', kinds.map((k) => [k.type, k.label]))),
+    field('Identifier', input('career_source_identifier', '')),
   ]);
   section('Company Watchlist', [
-    el('table', {}, [el('tbody', {}, watchRows)]),
+    el('table', {}, [
+      el('thead', {}, [el('tr', {}, ['Company', 'Priority', 'Source', 'Status', 'Jobs', 'Last scan', 'Action']
+        .map((h) => el('th', { text: h })))]),
+      el('tbody', {}, watchRows),
+    ]),
+    el('div', { class: 'muted', text: 'MANUAL means no public endpoint could be verified for that '
+      + 'company - nothing is fetched for it and only the careers link is offered. A source only '
+      + 'becomes ACTIVE once a live request returned real postings.' }),
     newWatch,
     el('div', { class: 'card-actions' }, [
       el('button', { class: 'small', text: 'Add company', onclick: async () => {
@@ -757,6 +852,8 @@ async function loadConfig() {
         } catch (err) { toast(err.message, true); }
       } }),
     ]),
+    el('div', { class: 'muted', html: kinds.map((k) =>
+      '<b>' + escapeHtml(k.label) + '</b>: ' + escapeHtml(k.identifier_label || '-')).join('<br>') }),
   ]);
 
   /* -- Matching -- */

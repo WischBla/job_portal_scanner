@@ -203,3 +203,11 @@ code { font-family: var(--mono); font-size: 12px; background: #f5f6f8; padding: 
   .topbar .wrap { gap: 12px; }
   .brand { display: none; }
 }
+
+/* Scan summary: a short read-out under the scan button, not a dashboard. */
+.scan-summary { margin: 0 0 16px; padding: 10px 12px; border: 1px solid #d8d8d8;
+  border-radius: 4px; background: #fafafa; max-width: 380px; }
+.scan-summary table { width: 100%; border: 0; }
+.scan-summary td { border: 0; padding: 1px 0; font-size: 13px; }
+.scan-summary td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.scan-failure { margin-top: 8px; font-size: 12px; color: #9a2c2c; }

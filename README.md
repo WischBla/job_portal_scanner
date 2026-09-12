@@ -76,6 +76,59 @@ Model, Application Automation, System.
 
 ---
 
+## Job source coverage
+
+The company watchlist is the primary discovery source; the aggregators are a
+thin supplement. Each company is either scanned through a verified public
+endpoint or honestly marked MANUAL.
+
+| Source kind | How it is read | Companies |
+|---|---|---|
+| Greenhouse | public board API | Proton, Scandit, On |
+| Lever | public postings API | SonarSource, ANYbotics |
+| SmartRecruiters | public Posting API + job-ad detail | Nexthink |
+| SuccessFactors career site | public server-rendered search + `itemprop="description"` | Swiss Re, SIX, Zurich Insurance, Adnovum |
+| Phenom career site | public unauthenticated careers endpoint, filtered by country | Roche, ABB |
+| Amazon Jobs | `amazon.jobs` public search JSON | Amazon Web Services / AWS |
+| schema.org JobPosting | JSON-LD in a public, server-rendered career page | available for any company that publishes it |
+| RSS / Atom | public feed | available |
+
+Everything above is public and unauthenticated. Nothing logs in, works around a
+CAPTCHA or an anti-bot check, or scrapes LinkedIn or jobs.ch.
+
+### Why a company stays MANUAL
+
+MANUAL is a real answer, not a gap to paper over: the entry keeps its place on
+the watchlist, offers "Open careers page", and the application never pretends it
+is being scanned.
+
+* **Google, Microsoft, Meta, IBM, NVIDIA** - no stable public feed.
+* **UBS, Avaloq** - the careers site answers an automated request with HTTP 403.
+  Working around that is out of scope by design.
+* **Swisscom, Zuehlke, Red Hat, Hitachi Energy** - Workday only, which is not a
+  discovery source here (the Apply Assistant still supports Workday forms).
+* **PostFinance, Novartis, Siemens Switzerland** - results are rendered in the
+  browser, so there is nothing server-side to read.
+
+### Source health
+
+Config → Job Sources shows coverage per source kind and lists every failure by
+company, with its error and when it last worked. A source that breaks is
+visible; it never just quietly stops contributing. Config → Company Watchlist
+shows the same per company: source, status, jobs from the last scan, last scan.
+
+A scan reports what it did - sources scanned, companies scanned, jobs fetched,
+Swiss eligible, relevant, new, source failures - and one failing source never
+aborts the run.
+
+### Company priority
+
+Priority A / B / C is a tie-breaker only. Ranking is `match score DESC`, then
+company priority, then posting date. A weak role at a priority-A company never
+outranks a strong one elsewhere.
+
+---
+
 ## Matching
 
 Two stages, in a fixed order.
@@ -242,13 +295,15 @@ scorer so old and new cards read the same way.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 174 tests
+.venv/bin/python -m pytest tests -q      # 237 tests
 .venv/bin/python run.py --reload         # auto-reload
 ```
 
 | Module | Responsibility |
 |---|---|
 | `jobscanner/sources/` | one adapter per portal; they fetch, they never filter |
+| `jobscanner/sources/registry.py` | maps a watchlist entry onto an adapter + config, and verifies it |
+| `jobscanner/watchlist.py` | the company watchlist and per-company source health |
 | `jobscanner/normalizer.py` | raw payload → normalised job (location, work model, seniority, dedupe) |
 | `jobscanner/locations.py` | Swiss eligibility, cities, cantons, work model |
 | `jobscanner/filters.py` | stage 1 hard rules |
@@ -268,8 +323,12 @@ frontend framework - there is no technical need for one here.
 
 ### Adding a job source
 
-Most useful results come from company career boards. Config → Job Sources → add
-one, for example Greenhouse with `{"board_token": "proton", "company": "Proton"}`
-or Lever with `{"site": "example", "region": "eu"}`. The public aggregator APIs
-(Arbeitnow, Remotive, Jobicy) carry very few Swiss leadership roles; each source
-documents its own limitations in the Config screen.
+Most useful results come from company career boards, so the normal way to add
+one is Config → Company Watchlist: pick the company, pick the source kind, paste
+the identifier, then press **Check source**. Nothing becomes ACTIVE until that
+live request comes back with real postings.
+
+Config → Job Sources also still accepts a raw source for anything that is not a
+single employer. The public aggregator APIs (Arbeitnow, Remotive, Jobicy) carry
+very few Swiss leadership roles; each source documents its own limitations in the
+Config screen.
