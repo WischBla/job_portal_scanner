@@ -137,8 +137,8 @@ RECOMMENDED_PROFILE = {
     # -- salary -----------------------------------------------------------
     'salary_mode': 'ranking',          # ignore | ranking | hard
     'allow_missing_salary': True,
-    'minimum_salary_chf': 235000,      # "interesting from here"
-    'salary_target_chf': 300000,       # target band 280-350k+
+    'minimum_salary_chf': 235000,      # ranking floor, tunable in Profile
+    'salary_target_chf': 300000,       # ranking target, tunable in Profile
     'salary_floor_chf': 200000,        # published and clearly below -> penalty
 
     # -- languages --------------------------------------------------------
@@ -154,7 +154,7 @@ RECOMMENDED_PROFILE = {
 PRESETS = [
     {
         'key': RECOMMENDED_KEY,
-        'name': 'Sebastian - Swiss Leadership Search',
+        'name': 'Swiss Leadership Search',
         'description': (
             'Head / Director / Principal / Lead technology leadership roles that can '
             'realistically be worked from Switzerland. Strict Switzerland geography, '

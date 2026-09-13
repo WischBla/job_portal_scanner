@@ -1,4 +1,4 @@
-"""The recommended "Sebastian - Swiss Leadership Search" profile.
+"""The recommended "Swiss Leadership Search" profile.
 
 These tests pin down the promises the preset makes:
 
@@ -38,7 +38,7 @@ class PresetValuesTests(unittest.TestCase):
 
     def test_preset_is_registered_and_recommended(self):
         preset = presets.recommended_preset()
-        self.assertEqual(preset['name'], 'Sebastian - Swiss Leadership Search')
+        self.assertEqual(preset['name'], 'Swiss Leadership Search')
         self.assertTrue(preset['is_recommended'])
 
     def test_minimum_score_is_62_not_75_80_or_82(self):
