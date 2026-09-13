@@ -107,6 +107,25 @@ button.small { padding: 3px 8px; font-size: 13px; }
   vertical-align: 1px;
 }
 .badge.new { border-color: var(--accent); color: var(--accent); }
+.badge.warn { border-color: var(--warn); color: var(--warn); }
+
+/* A job imported from an alert: enough to rank it, not enough to trust it. */
+.needs-details {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 12px; padding: 8px 10px; font-size: 13px;
+  border: 1px solid var(--line-strong); border-left: 2px solid var(--warn);
+  border-radius: var(--radius); color: var(--text-soft);
+}
+
+/* ------------------------------------------------- alert import preview */
+.import-preview { margin-top: 16px; }
+.import-preview h3 { font-size: 15px; margin: 0 0 2px; }
+.import-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.import-row input { width: auto; margin-top: 3px; }
+.import-title { font-weight: 600; font-size: 14px; }
 
 .detail { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; }
 .detail .block h4 {
