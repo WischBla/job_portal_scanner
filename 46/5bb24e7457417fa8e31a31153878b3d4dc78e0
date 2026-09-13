@@ -1,0 +1,26 @@
+jobscanner/apply/assistant.py
+  s_d9eb6e20015229::t_7364449b1da5fb 147-154,166-173
+static/app.js
+  s_d9eb6e20015229::t_95dbf03a5971b9 739,745-746
+jobscanner/documents.py
+  s_d9eb6e20015229::t_014ee92ba5198e 40-42,50-60,152,242,277
+  s_d9eb6e20015229::t_7364449b1da5fb 61
+tests/test_workspace.py
+  s_d9eb6e20015229::t_51ce9b16e11fc2 512-571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "465bb24e7457417fa8e31a31153878b3d4dc78e0",
+  "prompts": {},
+  "sessions": {
+    "s_d9eb6e20015229": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "66a731a4-eb60-410d-8e30-33a97f3762e6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
