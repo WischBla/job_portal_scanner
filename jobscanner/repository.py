@@ -2,6 +2,7 @@
 
 import json
 
+from . import fit
 from .db import now_iso, row_to_dict, utc_now_iso
 from .filters import GROUP_LABELS, rejection_group
 from .scoring import EXCELLENT_FROM, STRONG_FROM
@@ -29,7 +30,7 @@ _JOB_COLUMNS = [
     'published_at', 'salary_min', 'salary_max', 'salary_currency', 'salary_period',
     'match_score', 'match_label', 'match_reasons', 'matched_terms', 'match_breakdown',
     'match_concerns',
-]
+] + list(fit.SCORE_COLUMNS)
 _JSON_COLUMNS = ('match_reasons', 'matched_terms', 'match_breakdown', 'match_concerns')
 
 
@@ -144,6 +145,7 @@ class JobRepository:
             'match_breakdown': json.dumps(scored['breakdown'], ensure_ascii=False),
             'match_concerns': json.dumps(scored['concerns'], ensure_ascii=False),
         })
+        values.update(fit.score_columns(scored))
 
         if existing:
             assignments = ','.join('{0}=?'.format(c) for c in _JOB_COLUMNS)

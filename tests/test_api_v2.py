@@ -337,3 +337,40 @@ class ShellTests(ApiTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RescoreTests(unittest.TestCase):
+    """Rescoring re-applies the model without touching the user's work."""
+
+    def test_rescore_keeps_state_feedback_and_application_links(self):
+        from tests.helpers import TempDatabase
+        from jobscanner import jobs_service
+        with TempDatabase() as database:
+            with database.connect() as conn:
+                conn.execute(
+                    "INSERT INTO discovered_jobs (source, external_id, company, title, "
+                    "job_url, description, match_score, state, first_seen, last_seen, "
+                    "source_key) VALUES ('T','1','Example AG','Head of Platform Engineering',"
+                    "'https://x.test/1','Own reliability, observability and the engineering "
+                    "operating model.',70,'SAVED','2026-01-01','2026-01-01','T:1')")
+                conn.commit()
+                job_id = conn.execute('SELECT id FROM discovered_jobs').fetchone()[0]
+                jobs_service.set_feedback(job_id, 'YES', conn=conn)
+
+                self.assertEqual(jobs_service.rescore(conn), 1)
+
+                card = jobs_service.get_card(job_id, conn, with_ai=False)
+                self.assertEqual(card['state'], 'SAVED')
+                self.assertEqual(card['feedback'], 'YES')
+                self.assertEqual(card['personal_fit'], card['score'])
+                self.assertGreater(card['base_score'], 0)
+
+    def test_the_endpoint_reports_how_many_jobs_it_touched(self):
+        from tests.helpers import TempDatabase
+        with TempDatabase():
+            from fastapi.testclient import TestClient
+            from app import app
+            client = TestClient(app)
+            body = client.post('/api/jobs/rescore').json()
+            self.assertIn('rescored', body)
+            self.assertIn('counts', body)

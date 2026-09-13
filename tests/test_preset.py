@@ -194,12 +194,20 @@ class SalaryTests(unittest.TestCase):
         self.assertEqual(without['score'], published['score'])
         self.assertIn('Compensation not published', without['concerns'])
 
-    def test_published_salary_clearly_below_the_range_costs_real_points(self):
+    def test_published_salary_clearly_below_the_range_costs_its_whole_dimension(self):
+        """Compensation is worth five points, so it can cost at most five.
+
+        It used to return -12, which quietly turned a five-point dimension
+        into a seventeen-point swing and let one published figure outweigh the
+        entire leadership dimension.  The concern is what carries the message.
+        """
         low = self.scorer.score(
             self.job(salary_min=150000, salary_max=180000, salary_currency='CHF'), self.profile)
         high = self.scorer.score(
             self.job(salary_min=300000, salary_max=350000, salary_currency='CHF'), self.profile)
-        self.assertLess(low['score'], high['score'] - 10)
+        self.assertLess(low['score'], high['score'])
+        salary = next(p for p in low['breakdown'] if p['dimension'] == 'salary')
+        self.assertEqual(salary['points'], 0)
         self.assertTrue([c for c in low['concerns'] if 'clearly below' in c])
 
     def test_a_low_published_salary_is_still_not_deleted_by_default(self):

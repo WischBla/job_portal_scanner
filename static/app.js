@@ -6,10 +6,25 @@
 const state = { view: 'jobs', jobs: [], counts: {}, config: null, profile: null,
   feedbackReasons: [] };
 
-/* Why a job was a "no". Recorded for later calibration; nothing retrains. */
-const FEEDBACK_REASONS = ['Too operational', 'Too junior', 'Too commercial',
-  'Too much consulting', 'Wrong location', 'Insufficient technical responsibility',
-  'Insufficient leadership scope', 'Compensation concern', 'Other'];
+/* Why a job was a yes or a no. Recorded for later calibration; nothing retrains. */
+const FEEDBACK_REASONS_NEGATIVE = ['Too stakeholder-heavy', 'Too political / external',
+  'Too consulting-heavy', 'Too hands-on IC', 'Too software-development focused',
+  'Too little technical ownership', 'Too little transformation scope',
+  'Seniority too low', 'Compensation likely too low', 'Location/work model poor'];
+const FEEDBACK_REASONS_POSITIVE = ['Excellent technical ownership',
+  'Excellent SRE / platform fit', 'Excellent transformation scope',
+  'Excellent technical program fit'];
+const FEEDBACK_REASONS = FEEDBACK_REASONS_NEGATIVE
+  .concat(FEEDBACK_REASONS_POSITIVE).concat(['Other']);
+
+/* The reasons that make sense next to the verdict the user just gave. */
+function reasonsFor(verdict) {
+  if (verdict === 'YES') return FEEDBACK_REASONS_POSITIVE.concat(['Other']);
+  if (verdict === 'MAYBE' || verdict === 'NO') {
+    return FEEDBACK_REASONS_NEGATIVE.concat(['Other']);
+  }
+  return [];
+}
 
 /* ------------------------------------------------------------------ util */
 const $ = (sel, root) => (root || document).querySelector(sel);
@@ -106,15 +121,52 @@ function compBlock(comp) {
   return el('div', { class: 'comp' }, rows);
 }
 
+/* "-7" / "0" - an adjustment is never positive, so the sign is informative. */
+function signed(value) {
+  const number = Number(value || 0);
+  return number === 0 ? '0' : number.toFixed(0);
+}
+
+/* The four numbers of the fit model. The base score is deliberately shown:
+   the user has to be able to see why a technically strong job moved down. */
+function fitBlock(job) {
+  const style = job.operating_style || {};
+  const career = job.career_direction || {};
+  const line = (label, value, detail) => el('div', { class: 'fit-row' }, [
+    el('span', { class: 'fit-label', text: label }),
+    el('span', { class: 'fit-value', text: value }),
+    detail ? el('span', { class: 'fit-detail', text: detail }) : null,
+  ]);
+  return el('div', { class: 'fit' }, [
+    line('Base match score', String(job.base_score), ''),
+    line('Operating style', signed(style.adjustment),
+      humanClass(style.classification) + (style.detail ? ' - ' + style.detail : '')),
+    line('Career direction', signed(career.adjustment),
+      humanClass(career.classification) + (career.detail ? ' - ' + career.detail : '')),
+    line('Personal fit score', String(job.score), job.band || ''),
+  ]);
+}
+
+function humanClass(value) {
+  if (!value) return '';
+  return value.toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
 function jobCard(job) {
   const cls = job.classification.toLowerCase().replace(/\s+/g, '-');
   const meta = [job.company, job.location, job.work_model];
   if (job.age) meta.push(job.age);
 
   const head = el('div', { class: 'card-head' }, [
-    el('div', { class: 'score ' + cls }, [
+    el('div', { class: 'score ' + cls, title: 'Personal fit ' + job.score
+        + ' = base ' + job.base_score + ' ' + signed(job.operating_style.adjustment)
+        + ' operating style ' + signed(job.career_direction.adjustment)
+        + ' career direction' }, [
       el('div', { class: 'value', text: String(job.score) }),
       el('div', { class: 'class', text: job.classification }),
+      job.base_score !== job.score
+        ? el('div', { class: 'base', text: 'base ' + job.base_score })
+        : null,
     ]),
     el('div', { class: 'card-title' }, [
       el('h3', {}, [
@@ -139,6 +191,10 @@ function jobCard(job) {
         .map((c) => el('li', { text: c }))),
     ]),
     el('div', { class: 'block' }, [
+      el('h4', { text: 'Personal fit' }),
+      fitBlock(job),
+    ]),
+    el('div', { class: 'block' }, [
       el('h4', { text: 'Estimated compensation' }),
       compBlock(job.compensation),
     ]),
@@ -159,16 +215,16 @@ function jobCard(job) {
       text: value,
       onclick: () => setFeedback(job, job.feedback === value ? '' : value),
     })),
-    job.feedback === 'NO'
+    job.feedback
       ? selectBox('feedback_reason_' + job.id, job.feedback_reason,
-          [['', 'Reason (optional)']].concat(FEEDBACK_REASONS.map((r) => [r, r])))
+          [['', 'Reason (optional)']].concat(reasonsFor(job.feedback).map((r) => [r, r])))
       : null,
-    job.feedback && job.feedback !== 'NO'
+    job.feedback
       ? el('span', { class: 'muted', text: 'Saved for later calibration.' }) : null,
   ]);
-  if (job.feedback === 'NO') {
+  if (job.feedback) {
     const picker = verdict.querySelector('select');
-    picker.addEventListener('change', () => setFeedback(job, 'NO', picker.value));
+    picker.addEventListener('change', () => setFeedback(job, job.feedback, picker.value));
   }
 
   const actions = el('div', { class: 'card-actions' }, [
@@ -233,8 +289,8 @@ async function loadJobs() {
   renderJobs();
   const counts = data.counts;
   const scan = data.last_scan;
-  const parts = [counts.total + ' opportunities', counts.excellent + ' excellent',
-    counts.strong + ' strong', counts.saved + ' saved'];
+  const parts = [counts.total + ' opportunities', counts.excellent + ' exceptional fit',
+    counts.strong + ' strong fit', counts.saved + ' saved'];
   if (scan && scan.finished_at) parts.push('last scan ' + scan.finished_at.replace('T', ' ').replace('Z', ''));
   $('#job-summary').textContent = parts.join('  ·  ');
 }

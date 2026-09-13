@@ -11,15 +11,14 @@ from datetime import datetime, timezone
 from . import compensation
 from .ai import service as ai_service
 from .db import connect, row_to_dict
+#: Recommendation bands, read from the Personal Fit Score.  The single source
+#: of truth is `scoring`; they are re-exported here because the Jobs screen and
+#: the counts query have always imported them from this module.
+from .scoring import EXCELLENT_FROM, REVIEW_FROM, STRONG_FROM, WEAK_FROM
 from .settings import load_settings
 
 MAX_REASONS = 5
 MAX_CONCERNS = 3
-
-EXCELLENT_FROM = 80
-STRONG_FROM = 70
-REVIEW_FROM = 60
-WEAK_FROM = 50
 
 #: Company priority breaks ties and nothing else.  A priority-A job that scored
 #: 64 must never appear above a priority-B job that scored 82, so the score is
@@ -30,11 +29,23 @@ PRIORITY_ORDER = "CASE w.priority WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'C' THEN 
 #: in the scorer or the filters reads it, so a "NO" never silently changes how
 #: the next scan behaves.
 FEEDBACK_VALUES = ('', 'YES', 'MAYBE', 'NO')
-FEEDBACK_REASONS = [
-    'Too operational', 'Too junior', 'Too commercial', 'Too much consulting',
-    'Wrong location', 'Insufficient technical responsibility',
-    'Insufficient leadership scope', 'Compensation concern', 'Other',
+
+#: Why a job was a poor fit.  The vocabulary deliberately mirrors what the two
+#: personal-fit adjustments measure, so a verdict can later be compared against
+#: what the scorer believed - that is the whole point of recording it.
+FEEDBACK_REASONS_NEGATIVE = [
+    'Too stakeholder-heavy', 'Too political / external', 'Too consulting-heavy',
+    'Too hands-on IC', 'Too software-development focused',
+    'Too little technical ownership', 'Too little transformation scope',
+    'Seniority too low', 'Compensation likely too low', 'Location/work model poor',
 ]
+#: Why a job was a good fit.  Recording a YES without a reason loses exactly
+#: the information that makes the calibration data useful.
+FEEDBACK_REASONS_POSITIVE = [
+    'Excellent technical ownership', 'Excellent SRE / platform fit',
+    'Excellent transformation scope', 'Excellent technical program fit',
+]
+FEEDBACK_REASONS = FEEDBACK_REASONS_NEGATIVE + FEEDBACK_REASONS_POSITIVE + ['Other']
 
 #: States the Jobs screen understands.
 OPEN_STATES = ('NEW', 'SEEN', 'SAVED', 'APPLIED')
@@ -44,24 +55,25 @@ HIDDEN_STATES = ('IGNORED', 'EXPIRED')
 
 
 def classify(score):
-    """The band label.  Fixed thresholds, so "Excellent" always means 80+."""
+    """The band label for a Personal Fit Score.  85+ is always Exceptional."""
     score = int(score or 0)
     if score >= EXCELLENT_FROM:
-        return 'Excellent'
+        return 'Exceptional'
     if score >= STRONG_FROM:
         return 'Strong'
     if score >= REVIEW_FROM:
         return 'Review'
-    return 'Weak' if score >= WEAK_FROM else 'Below threshold'
+    return 'Edge' if score >= WEAK_FROM else 'Low priority'
 
 
-#: Band -> the sentence the Jobs screen shows next to the score.
+#: Band -> the sentence the Jobs screen shows next to the score.  A low-priority
+#: job is ranked last and labelled honestly; it is never deleted.
 BAND_LABELS = {
-    'Excellent': 'Excellent / high priority',
-    'Strong': 'Strong match',
+    'Exceptional': 'Exceptional fit',
+    'Strong': 'Strong fit',
     'Review': 'Worth reviewing',
-    'Weak': 'Weak / edge match',
-    'Below threshold': 'Below the display threshold',
+    'Edge': 'Edge case',
+    'Low priority': 'Low priority',
 }
 
 
@@ -146,6 +158,21 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
         'score': score,
         'classification': classify(score),
         'band': BAND_LABELS.get(classify(score), ''),
+        # The base score is never hidden: the card always shows what the job
+        # scored on relevance and what each adjustment did to it, so a move
+        # down the list can be read off the card itself.
+        'base_score': int(job.get('base_score') or score),
+        'personal_fit': int(job.get('personal_fit_score') or score),
+        'operating_style': {
+            'classification': job.get('operating_style_class') or '',
+            'adjustment': round(float(job.get('operating_style_adjustment') or 0.0), 1),
+            'detail': job.get('operating_style_detail') or '',
+        },
+        'career_direction': {
+            'classification': job.get('career_direction_class') or '',
+            'adjustment': round(float(job.get('career_direction_adjustment') or 0.0), 1),
+            'detail': job.get('career_direction_detail') or '',
+        },
         'feedback': job.get('feedback') or '',
         'feedback_reason': job.get('feedback_reason') or '',
         'reasons': reasons,
@@ -247,8 +274,8 @@ def set_feedback(job_id, verdict, reason='', note='', conn=None):
     reason = str(reason or '').strip()
     if reason and reason not in FEEDBACK_REASONS:
         raise ValueError('Unknown feedback reason: {0}'.format(reason))
-    if verdict != 'NO':
-        reason = ''       # a reason only ever qualifies a "NO"
+    if not verdict:
+        reason = ''       # clearing the verdict clears what qualified it
 
     owns = conn is None
     conn = conn or connect()
@@ -268,7 +295,11 @@ def set_feedback(job_id, verdict, reason='', note='', conn=None):
 
 
 def feedback_summary(conn=None):
-    """Counts per verdict and per "NO" reason, for the Config screen."""
+    """Counts per verdict and per reason, for the Config screen.
+
+    Positive reasons count too: "why this was a yes" is exactly as useful for
+    a later calibration as "why this was a no".
+    """
     owns = conn is None
     conn = conn or connect()
     try:
@@ -278,9 +309,35 @@ def feedback_summary(conn=None):
             verdicts[row[0]] = row[1]
         reasons = {row[0]: row[1] for row in conn.execute(
             "SELECT feedback_reason, COUNT(*) FROM discovered_jobs "
-            "WHERE feedback='NO' AND feedback_reason <> '' GROUP BY feedback_reason").fetchall()}
+            "WHERE feedback <> '' AND feedback_reason <> '' GROUP BY feedback_reason").fetchall()}
         return {'verdicts': verdicts, 'reasons': reasons,
                 'total': sum(verdicts.values())}
+    finally:
+        if owns:
+            conn.close()
+
+
+def rescore(conn=None):
+    """Re-run the current scorer over every stored job.
+
+    The profile and the fit model change over time; stored jobs would keep the
+    score they were given the day they were discovered.  This recomputes the
+    base score and both adjustments in place.  It is deliberately additive:
+    the job, its state, its feedback and its link to an application are never
+    touched, so a rescore can never lose work the user has done.
+    """
+    from .profile import from_row as profile_from_row
+    from .schema_v2 import rescore_existing_jobs
+
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        row = conn.execute('SELECT * FROM search_profile ORDER BY id LIMIT 1').fetchone()
+        if row is None:
+            return 0
+        count = rescore_existing_jobs(conn, profile_from_row(row_to_dict(row)))
+        conn.commit()
+        return count
     finally:
         if owns:
             conn.close()

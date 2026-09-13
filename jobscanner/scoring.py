@@ -1,4 +1,16 @@
-"""MatchScorer - an explainable 0-100 relevance score.
+"""MatchScorer - an explainable 0-100 relevance score, then personal fit.
+
+Two layers, deliberately kept apart:
+
+``Base Match Score``
+    Is this job technically relevant?  The seven weighted dimensions below,
+    minus the legacy down-ranking for low-relevance domains.  This is the
+    number the scanner has always produced and it is never hidden.
+
+``Personal Fit Score``
+    Base + Operating Style Adjustment + Career Direction Adjustment, both
+    computed in :mod:`jobscanner.fit`.  This is what the Jobs screen ranks by,
+    because relevance and fit are not the same question.
 
 Weights (sum = 100):
 
@@ -18,6 +30,7 @@ did that.
 
 import re
 
+from . import fit
 from .locations import fold
 
 WEIGHTS = {
@@ -67,29 +80,37 @@ MATRIX_LEADERSHIP_TERMS = ['matrix', 'cross-functional', 'cross functional', 'pr
                            'technical leadership', 'influence without authority', 'virtual team',
                            'steering', 'program management', 'portfolio']
 
-#: Classification bands.  Fixed, so "Excellent" always means the same thing;
-#: the profile's minimum score only decides what is shown, not what it is called.
+#: Recommendation bands.  They read the *Personal Fit Score*, so the label
+#: answers "should I look at this?" rather than "does the vocabulary overlap?".
+#: Fixed thresholds, so "Exceptional Fit" always means the same thing; the
+#: profile's minimum score only decides what is shown, not what it is called.
 #:
-#:   80-100  Excellent / high priority
-#:   70-79   Strong match
-#:   60-69   Worth reviewing
-#:   50-59   Weak / edge match
-#:   < 50    normally hidden from the Jobs list (still stored, still explained)
-EXCELLENT_FROM = 80
-STRONG_FROM = 70
-REVIEW_FROM = 60
-WEAK_FROM = 50
-LABELS = [(EXCELLENT_FROM, 'Excellent match'), (STRONG_FROM, 'Strong match'),
-          (REVIEW_FROM, 'Worth reviewing'), (WEAK_FROM, 'Weak match'),
-          (0, 'Below threshold')]
+#:   85-100  Exceptional Fit
+#:   75-84   Strong Fit
+#:   65-74   Worth Reviewing
+#:   55-64   Edge Case
+#:   < 55    Low Priority - ranked last, never deleted
+EXCELLENT_FROM = 85
+STRONG_FROM = 75
+REVIEW_FROM = 65
+WEAK_FROM = 55
+LABELS = [(EXCELLENT_FROM, 'Exceptional Fit'), (STRONG_FROM, 'Strong Fit'),
+          (REVIEW_FROM, 'Worth Reviewing'), (WEAK_FROM, 'Edge Case'),
+          (0, 'Low Priority')]
 
 #: Titles that signal an execution-level scope rather than a leadership,
 #: program or strategy mandate.  They cost points; they never reject, because
 #: an unusual title can still sit on a real mandate ("Principal Engineer,
 #: Platform" is not junior).
+#:
+#: 'consultant' deliberately no longer appears here.  It used to be an opaque
+#: title rule that fired or stayed silent depending on whether the posting
+#: happened to mention any leadership word; the Career Direction Adjustment
+#: now judges consulting delivery from the actual responsibilities and says so
+#: in words, which is both more accurate and explainable.
 LOW_SCOPE_TITLE_TERMS = ['specialist', 'coordinator', 'administrator', 'support engineer',
                          'sysadmin', 'system administrator', 'technician', 'operator',
-                         'analyst', 'consultant']
+                         'analyst']
 
 #: How much a low-relevance domain costs.  Bounded on purpose: the point is to
 #: sink a commercial role to the bottom of the list, not to make it disappear.
@@ -142,11 +163,19 @@ class MatchScorer:
         # letting an unpublished detail push a good job below the threshold.
         advisories = self._advisories(job, profile, description)
 
-        penalty, penalty_concerns = self._downrank(job, profile, title, description)
-        total = sum(p['points'] for p in parts) - penalty
-        total = max(0, min(100, int(round(total))))
+        penalty, penalty_concerns, charges = self._downrank(job, profile, title, description)
+        base = sum(p['points'] for p in parts) - penalty
+        base = max(0, min(100, int(round(base))))
+
+        # Layer two: is this the *shape* of role the profile wants?  The
+        # charges from the base score travel with it so one signal is never
+        # paid for twice.
+        style, direction = fit.assess(job, charges)
+        total = fit.personal_fit(base, style['adjustment'], direction['adjustment'])
+
         reasons = [r for p in parts for r in p['reasons']]
         concerns = [c for p in parts for c in p['concerns']] + penalty_concerns + advisories
+        concerns += _fit_concerns(style, direction)
         terms = []
         for p in parts:
             for term in p.get('terms', []):
@@ -157,7 +186,13 @@ class MatchScorer:
         breakdown = [{'dimension': p['dimension'], 'points': round(p['points'], 1),
                       'max': p['max'], 'detail': p['detail']} for p in parts]
         return {
+            # 'score' is the ranked number, so every existing call site orders
+            # by personal fit without having to know this module changed.
             'score': total,
+            'personal_fit': total,
+            'base_score': base,
+            'operating_style': style,
+            'career_direction': direction,
             'label': label,
             'reasons': reasons,
             'concerns': concerns,
@@ -339,9 +374,11 @@ class MatchScorer:
         floor = int(profile.get('salary_floor_chf') or 0)
 
         if floor and top is not None and top < floor:
-            # Substantial, explicit penalty - but the job is still listed unless
-            # salary was configured as a hard filter.
-            return self._part('salary', -12, text,
+            # Compensation is worth five points of the base model, so it costs
+            # at most those five.  It used to return -12, which quietly made
+            # salary a seventeen-point swing and let one published figure
+            # outweigh the entire leadership dimension.
+            return self._part('salary', 0, text,
                               concerns=['Published compensation ({0}) is clearly below your range'
                                         .format(_chf(top))])
         if target and bottom is not None and bottom >= target:
@@ -364,7 +401,12 @@ class MatchScorer:
         strategic role that happens to mention go-to-market keeps most of its
         points; a purely commercial one loses enough to sink below the display
         threshold, and the reason is written down either way.
+
+        Returns ``(penalty, concerns, charges)``.  ``charges`` itemises what
+        was deducted for which term so :mod:`jobscanner.fit` can credit the
+        overlap back instead of charging for the same signal a second time.
         """
+        charges = []
         terms = profile.get('deprioritized_keywords') or []
         title_hits = _hits(title, terms)
         body_hits = [t for t in _hits(description, terms) if t not in title_hits]
@@ -376,9 +418,16 @@ class MatchScorer:
             _hits(title, profile.get('include_titles') or [])
             or _hits(title, profile.get('secondary_titles') or []))
         per_title_hit = DOWNRANK_RESCUED_PENALTY if rescued else DOWNRANK_TITLE_PENALTY
-        penalty = min(DOWNRANK_MAX,
-                      len(title_hits) * per_title_hit
-                      + len(body_hits) * DOWNRANK_BODY_PENALTY)
+        raw = [(t, per_title_hit) for t in title_hits]
+        raw += [(t, DOWNRANK_BODY_PENALTY) for t in body_hits]
+        uncapped = sum(points for _, points in raw)
+        penalty = min(DOWNRANK_MAX, uncapped)
+        # What was actually deducted, per term - the cap is shared out
+        # proportionally so the credit in `fit` can never exceed what the base
+        # score really charged.
+        shrink = (penalty / uncapped) if uncapped > penalty > 0 else 1.0
+        charges = [{'term': term, 'points': points * shrink, 'kind': 'deprioritized'}
+                   for term, points in raw]
         concerns = []
         if title_hits and rescued:
             concerns.append('Commercial domain in the title ({0}) - confirm how technical the '
@@ -395,9 +444,11 @@ class MatchScorer:
         scope_hits = _hits(title, LOW_SCOPE_TITLE_TERMS)
         if scope_hits and not _hits('{0} {1}'.format(title, description), LEADERSHIP_TERMS):
             penalty += LOW_SCOPE_PENALTY
+            charges.append({'term': scope_hits[0], 'points': LOW_SCOPE_PENALTY,
+                            'kind': 'low_scope'})
             concerns.append('"{0}" scope with no leadership or program mandate described'
                             .format(scope_hits[0]))
-        return penalty, concerns
+        return penalty, concerns, charges
 
     # -- advisories (no points, only "things to clarify") ------------------
     def _advisories(self, job, profile, description):
@@ -420,6 +471,18 @@ class MatchScorer:
         concerns = [] if hits else ['no AI / automation angle mentioned']
         return self._part('strategic', points, '{0} strategic signal(s)'.format(len(hits)),
                           reasons, concerns, hits[:3])
+
+
+def _fit_concerns(style, direction):
+    """The two adjustments as sentences, so a move down is never unexplained."""
+    notes = []
+    if style['adjustment'] < 0:
+        notes.append('Operating style {0:+.0f}: {1}'.format(
+            style['adjustment'], style['detail']))
+    if direction['adjustment'] < 0:
+        notes.append('Career direction {0:+.0f}: {1}'.format(
+            direction['adjustment'], direction['detail']))
+    return notes
 
 
 def _chf(value):

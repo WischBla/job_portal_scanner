@@ -96,7 +96,7 @@ class MigrationTests(unittest.TestCase):
             # The label must be one of the current five bands - a V1 German
             # label surviving here would mean the rescore never ran.
             self.assertIn(job['match_label'],
-                          ('Excellent', 'Strong', 'Review', 'Weak', 'Below threshold'))
+                          ('Exceptional', 'Strong', 'Review', 'Edge', 'Low priority'))
 
     def test_jobs_scored_by_v1_are_re_explained_in_the_current_vocabulary(self):
         with jsdb.connect() as conn:

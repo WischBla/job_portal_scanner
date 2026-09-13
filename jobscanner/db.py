@@ -31,7 +31,7 @@ _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 #: and unpacked into a different checkout on another.
 _WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def set_db_path(path):
@@ -507,6 +507,27 @@ def migrate(conn):
     _add_column(conn, 'scout_runs', 'swiss_eligible_count', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'duplicate_count', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'source_failure_count', 'INTEGER NOT NULL DEFAULT 0')
+
+    # -- migration 010: personal-fit calibration ----------------------------
+    # The base match score stays exactly what it was and is never overwritten;
+    # the two adjustments and the resulting personal fit are stored next to it
+    # so the Jobs screen can always show why a technically strong job moved
+    # down.  `match_score` now carries the Personal Fit Score, because that is
+    # what the list ranks by.
+    _add_column(conn, 'discovered_jobs', 'base_score', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'operating_style_adjustment',
+                'REAL NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'operating_style_class', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'operating_style_detail', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'career_direction_adjustment',
+                'REAL NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'career_direction_class', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'career_direction_detail', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'personal_fit_score', 'INTEGER NOT NULL DEFAULT 0')
+    # Jobs stored before this migration have no adjustment yet; until the next
+    # rescore their personal fit is simply their base score.
+    conn.execute('UPDATE discovered_jobs SET base_score=match_score, '
+                 'personal_fit_score=match_score WHERE base_score=0 AND personal_fit_score=0')
 
     _seed_sources(conn)
     _seed_presets(conn)

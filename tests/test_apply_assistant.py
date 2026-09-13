@@ -174,3 +174,77 @@ class ConditionalQuestionTests(unittest.TestCase):
 
     def test_start_date_questions_map_to_availability(self):
         self.assertEqual(fields.classify('When can you start working with us?')[0], 'notice_period')
+
+
+class WebsiteFieldTests(unittest.TestCase):
+    """The generic website field - no ESAQ-specific schema, no special case."""
+
+    LABELS = ['Website', 'Professional website', 'Personal website', 'Portfolio',
+              'Homepage', 'Personal site', 'Webseite', 'Your website',
+              'Portfolio URL', 'Website (optional)']
+
+    def test_every_website_label_maps_to_the_generic_field(self):
+        for label in self.LABELS:
+            self.assertEqual(fields.classify(label)[0], 'website_url', label)
+
+    def test_the_configured_url_is_what_gets_filled(self):
+        person = dict(DEFAULT_PERSON, website_url='https://esaq.de/')
+        for label in self.LABELS:
+            key, _ = fields.classify(label)
+            self.assertEqual(fields.value_for(key, person), 'https://esaq.de/', label)
+
+    def test_the_url_comes_from_the_profile_and_is_not_hard_coded(self):
+        """A blank profile fills nothing - the value lives in the database."""
+        person = dict(DEFAULT_PERSON, website_url='')
+        self.assertEqual(fields.value_for('website_url', person), '')
+        self.assertNotIn('website_url', fields.plan(person))
+        import inspect
+        for module in (fields, adapters, assistant):
+            self.assertNotIn('esaq', inspect.getsource(module).lower())
+
+    def test_only_the_url_is_ever_offered(self):
+        """No llms.txt, profile.json, Impressum or Datenschutz is uploaded."""
+        person = dict(DEFAULT_PERSON, website_url='https://esaq.de/')
+        values = fields.plan(person)
+        self.assertEqual(values.get('website_url'), 'https://esaq.de/')
+        blob = ' '.join(str(v) for v in values.values()).lower()
+        for unwanted in ('llms.txt', 'profile.json', 'impressum', 'datenschutz'):
+            self.assertNotIn(unwanted, blob)
+
+    def test_a_website_question_that_is_subjective_still_needs_review(self):
+        key, reason = fields.classify('Tell us about your personal website')
+        self.assertEqual(key, '')
+        self.assertTrue(reason)
+
+
+class NeverSubmitRegressionTests(unittest.TestCase):
+    """The guarantee is immutable; re-asserted here after the fit calibration."""
+
+    def test_the_setting_is_locked_on(self):
+        from jobscanner.settings import DEFAULT_SETTINGS, LOCKED_SETTINGS
+        self.assertTrue(DEFAULT_SETTINGS['apply_never_submit'])
+        self.assertIn('apply_never_submit', LOCKED_SETTINGS)
+
+    def test_saving_cannot_switch_the_guarantee_off(self):
+        from tests.helpers import TempDatabase
+        from jobscanner.settings import load_settings, save_settings
+        with TempDatabase():
+            save_settings({'apply_never_submit': False})
+            self.assertTrue(load_settings()['apply_never_submit'])
+
+    def test_no_module_in_the_apply_package_clicks_a_submit_control(self):
+        import inspect
+        for module in (adapters, assistant, fields):
+            source = inspect.getsource(module)
+            self.assertNotIn('click(submit', source)
+            self.assertNotIn('.click()  # submit', source)
+
+    def test_cover_letter_upload_stays_off_and_cv_upload_stays_on(self):
+        from jobscanner.settings import DEFAULT_SETTINGS
+        self.assertTrue(DEFAULT_SETTINGS['apply_upload_cv'])
+        self.assertFalse(DEFAULT_SETTINGS['apply_upload_motivation'])
+
+    def test_subjective_questions_still_require_review(self):
+        for label in ('Why do you want to work here?', 'Salary expectation',
+                      'Describe your leadership style', 'Warum die Schweiz?'):
+            self.assertEqual(fields.classify(label)[0], '', label)
