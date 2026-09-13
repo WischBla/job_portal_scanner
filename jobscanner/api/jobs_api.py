@@ -211,3 +211,16 @@ def create_application_from_job(job_id: int):
     if application is None:
         raise HTTPException(404, 'Job not found')
     return application
+
+
+@router.post('/jobs/rescore')
+def rescore_jobs():
+    """Re-apply the current profile and fit model to every stored job.
+
+    Needed whenever the search profile or the personal-fit model changes:
+    without it, stored jobs keep the score they were given when they were
+    discovered.  Nothing but the score and its explanation is rewritten.
+    """
+    with connect() as conn:
+        count = jobs_service.rescore(conn)
+        return {'rescored': count, 'counts': jobs_service.counts(conn)}

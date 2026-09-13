@@ -240,21 +240,25 @@ def rescore_existing_jobs(conn, profile):
     """
     import json as _json
 
+    from . import fit as _fit
     from .scoring import MatchScorer
 
     scorer = MatchScorer()
+    extra = ','.join('{0}=?'.format(c) for c in _fit.SCORE_COLUMNS)
     rows = conn.execute('SELECT * FROM discovered_jobs').fetchall()
     for row in rows:
         job = dict(row)
         result = scorer.score(job, profile)
+        columns = _fit.score_columns(result)
         conn.execute(
             'UPDATE discovered_jobs SET match_score=?, match_label=?, match_reasons=?, '
-            'match_concerns=?, match_breakdown=?, matched_terms=? WHERE id=?',
-            (result['score'], _label(result['score']),
+            'match_concerns=?, match_breakdown=?, matched_terms=?, {0} WHERE id=?'.format(extra),
+            [result['score'], _label(result['score']),
              _json.dumps(result['reasons'], ensure_ascii=False),
              _json.dumps(result['concerns'], ensure_ascii=False),
              _json.dumps(result['breakdown'], ensure_ascii=False),
-             _json.dumps(result['terms'], ensure_ascii=False), job['id']))
+             _json.dumps(result['terms'], ensure_ascii=False)]
+            + [columns[c] for c in _fit.SCORE_COLUMNS] + [job['id']])
     # Estimates are derived from the job, so drop the cache once.
     conn.execute('DELETE FROM compensation_estimates')
     return len(rows)

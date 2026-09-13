@@ -21,7 +21,11 @@ FIELD_PATTERNS = [
     ('phone', [r'\bphone\b', r'\bmobile\b', r'\btelephone\b', r'\btelefon\b', r'\bhandy\b']),
     ('linkedin_url', [r'\blinkedin\b', r'\blinked[\s_-]*in profile\b']),
     ('github_url', [r'\bgithub\b']),
-    ('website_url', [r'\bwebsite\b', r'\bportfolio\b', r'\bpersonal site\b', r'\bhomepage\b']),
+    # "Website", "Professional website", "Personal website", "Portfolio" and
+    # "Homepage" all resolve to the one generic profile field - there is no
+    # per-site special case, only the URL the profile holds.
+    ('website_url', [r'\bwebsite\b', r'\bweb[\s_-]*site\b', r'\bwebseite\b',
+                     r'\bportfolio\b', r'\bpersonal site\b', r'\bhomepage\b']),
     ('city', [r'\bcity\b', r'\bstadt\b', r'\bort\b', r'\bcurrent location\b', r'\blocation\b']),
     ('postal_code', [r'\bpostal[\s_-]*code\b', r'\bzip\b', r'\bplz\b']),
     ('address', [r'\baddress\b', r'\bstreet\b', r'\bstrasse\b', r'\badresse\b']),

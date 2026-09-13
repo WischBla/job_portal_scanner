@@ -177,19 +177,21 @@ class DownRankTests(unittest.TestCase):
 
 
 class BandTests(unittest.TestCase):
+    """The bands read the Personal Fit Score, not the base match score."""
+
     def test_the_five_bands(self):
-        self.assertEqual(jobs_service.classify(92), 'Excellent')
-        self.assertEqual(jobs_service.classify(80), 'Excellent')
-        self.assertEqual(jobs_service.classify(79), 'Strong')
-        self.assertEqual(jobs_service.classify(70), 'Strong')
-        self.assertEqual(jobs_service.classify(69), 'Review')
-        self.assertEqual(jobs_service.classify(60), 'Review')
-        self.assertEqual(jobs_service.classify(59), 'Weak')
-        self.assertEqual(jobs_service.classify(50), 'Weak')
-        self.assertEqual(jobs_service.classify(49), 'Below threshold')
+        self.assertEqual(jobs_service.classify(92), 'Exceptional')
+        self.assertEqual(jobs_service.classify(85), 'Exceptional')
+        self.assertEqual(jobs_service.classify(84), 'Strong')
+        self.assertEqual(jobs_service.classify(75), 'Strong')
+        self.assertEqual(jobs_service.classify(74), 'Review')
+        self.assertEqual(jobs_service.classify(65), 'Review')
+        self.assertEqual(jobs_service.classify(64), 'Edge')
+        self.assertEqual(jobs_service.classify(55), 'Edge')
+        self.assertEqual(jobs_service.classify(54), 'Low priority')
 
     def test_every_band_has_a_sentence(self):
-        for band in ('Excellent', 'Strong', 'Review', 'Weak', 'Below threshold'):
+        for band in ('Exceptional', 'Strong', 'Review', 'Edge', 'Low priority'):
             self.assertTrue(jobs_service.BAND_LABELS[band])
 
 
@@ -275,13 +277,17 @@ class FeedbackTests(unittest.TestCase):
                 self.assertEqual(card['feedback'], 'YES')
                 self.assertEqual(jobs_service.get_card(job_id, conn)['feedback'], 'YES')
 
-    def test_a_reason_only_qualifies_a_no(self):
+    def test_a_reason_qualifies_any_verdict_and_clearing_one_clears_both(self):
+        """A YES carries a reason too - "why yes" calibrates as well as "why no"."""
         with TempDatabase() as database:
             with database.connect() as conn:
                 job_id = self._job(conn)
-                card = jobs_service.set_feedback(job_id, 'NO', 'Too junior', conn=conn)
-                self.assertEqual(card['feedback_reason'], 'Too junior')
-                card = jobs_service.set_feedback(job_id, 'YES', 'Too junior', conn=conn)
+                card = jobs_service.set_feedback(job_id, 'NO', 'Seniority too low', conn=conn)
+                self.assertEqual(card['feedback_reason'], 'Seniority too low')
+                card = jobs_service.set_feedback(
+                    job_id, 'YES', 'Excellent SRE / platform fit', conn=conn)
+                self.assertEqual(card['feedback_reason'], 'Excellent SRE / platform fit')
+                card = jobs_service.set_feedback(job_id, '', conn=conn)
                 self.assertEqual(card['feedback_reason'], '')
 
     def test_an_unknown_verdict_or_reason_is_refused(self):
@@ -297,7 +303,7 @@ class FeedbackTests(unittest.TestCase):
         with TempDatabase() as database:
             with database.connect() as conn:
                 job_id = self._job(conn)
-                jobs_service.set_feedback(job_id, 'NO', 'Too commercial', conn=conn)
+                jobs_service.set_feedback(job_id, 'NO', 'Too consulting-heavy', conn=conn)
                 cards = jobs_service.list_cards(conn)
                 self.assertEqual(len(cards), 1)
                 self.assertEqual(cards[0]['score'], 75)
@@ -307,11 +313,11 @@ class FeedbackTests(unittest.TestCase):
         with TempDatabase() as database:
             with database.connect() as conn:
                 job_id = self._job(conn)
-                jobs_service.set_feedback(job_id, 'NO', 'Wrong location', conn=conn)
+                jobs_service.set_feedback(job_id, 'NO', 'Location/work model poor', conn=conn)
                 summary = jobs_service.feedback_summary(conn)
             self.assertEqual(summary['total'], 1)
             self.assertEqual(summary['verdicts']['NO'], 1)
-            self.assertEqual(summary['reasons']['Wrong location'], 1)
+            self.assertEqual(summary['reasons']['Location/work model poor'], 1)
 
 
 class ApplyAssistantTests(unittest.TestCase):

@@ -145,7 +145,8 @@ fails here is ever scored or shown:
 Every rejection is logged with a machine-readable code, so Config can explain
 where a scan's results went.
 
-**Stage 2 - relevance scoring** (`jobscanner/scoring.py`), 0-100:
+**Stage 2 - relevance scoring** (`jobscanner/scoring.py`), 0-100. This is the
+**Base Match Score**: it answers "is this job technically relevant?".
 
 | Dimension | Points |
 |---|---|
@@ -173,19 +174,81 @@ the bottom of the list. An execution-level title (specialist, coordinator,
 administrator, support engineer) costs points only when nothing in the posting
 describes a leadership, program or transformation mandate.
 
-**How to read a score:**
+**Stage 3 - personal fit** (`jobscanner/fit.py`). Relevance is not fit. A
+Principal Delivery Consultant and a Head of SRE both fill a posting with cloud,
+architecture and transformation vocabulary, so the base score rates them almost
+identically. Two named, bounded adjustments answer the second question - "is
+this the *shape* of job I want?":
+
+```
+Personal Fit Score = Base Match Score
+                   + Operating Style Adjustment     (0 .. -15)
+                   + Career Direction Adjustment    (0 .. -12)
+```
+
+**Operating Style Adjustment** - how much of the mandate is relationship,
+orchestration and external-representation work rather than technical ownership.
+
+| Classification | Adjustment |
+|---|---|
+| `TECHNICAL_OWNERSHIP` | 0 |
+| `BALANCED` | 0 to -3 |
+| `STAKEHOLDER_HEAVY` | -4 to -9 |
+| `POLITICAL_EXTERNAL` | -8 to -15 |
+
+**Career Direction Adjustment** - whether the role is technical leadership with
+ownership, transformation or organisational scope, or whether the primary job is
+feature implementation, consulting delivery or account management.
+
+| Classification | Adjustment |
+|---|---|
+| `STRATEGIC_TECHNICAL_LEADERSHIP` | 0 |
+| `TECHNICAL_PROGRAM_PLATFORM_LEADERSHIP` | 0 |
+| `ENGINEERING_MANAGEMENT_RELIABILITY` | 0 |
+| `BROAD_ARCHITECTURE_WITH_ORG_SCOPE` | 0 to -2 |
+| `PURE_SENIOR_IC` | -4 to -8 |
+| `CONSULTING_DELIVERY` | -4 to -9 |
+| `ACCOUNT_ENGAGEMENT_MANAGEMENT` | -6 to -12 |
+| `PURE_FEATURE_ENGINEERING` | -7 to -12 |
+
+Three rules keep the adjustments honest:
+
+* **Responsibility-driven, not title-driven.** A title hit weighs more than a
+  body hit because a title names the primary job, but a title alone never
+  saturates an adjustment. A title that names a *wanted* shape also protects the
+  posting: "Site Reliability Engineer - Application Edge" is an SRE role even
+  though the text mentions building things.
+* **Dominance, not presence.** Normal senior behaviour - cross-functional
+  collaboration, stakeholder management, executive communication, influence
+  without authority, coordination across teams - costs exactly nothing. A
+  penalty needs an unambiguous indicator ("engagement management", "government
+  relations", "revenue recognition"); generic words only ever add weight to an
+  indicator that has already fired.
+* **No double-penalty.** Whatever the base score already charged through
+  `deprioritized_keywords` is credited back before an adjustment is applied. One
+  signal, one deduction.
+
+The card always shows all four numbers. The base score is never hidden, so a
+technically strong job that moved down the list always says why.
+
+**How to read a Personal Fit Score:**
 
 | Score | Meaning |
 |---|---|
-| 80-100 | Excellent / high priority |
-| 70-79 | Strong match |
-| 60-69 | Worth reviewing |
-| 50-59 | Weak / edge match |
-| below 50 | Normally hidden from the Jobs list - still stored and still explained |
+| 85-100 | Exceptional fit |
+| 75-84 | Strong fit |
+| 65-74 | Worth reviewing |
+| 55-64 | Edge case |
+| below 55 | Low priority - ranked last, never deleted |
 
-Company priority is only ever a tie-breaker. The ordering is match score first,
-then priority, then posting date, so a priority-A job that scored 64 can never
-appear above a priority-B job that scored 82.
+Ranking uses the Personal Fit Score. Company priority is only ever a
+tie-breaker: the ordering is fit first, then priority, then posting date, so a
+priority-A job that scored 64 can never appear above a priority-B job that
+scored 82.
+
+`POST /api/jobs/rescore` re-applies the current profile and fit model to every
+stored job. Nothing but the score and its explanation is rewritten - state,
+feedback and the link to an application all survive.
 
 ### The search profile
 
@@ -210,14 +273,22 @@ What the profile controls:
   keywords, plus the down-ranked domains described above.
 * **Compensation** An interesting-from figure, a target and a
   published-and-clearly-below floor. In the recommended `ranking` mode none of
-  them ever removes a posting.
+  them ever removes a posting: there is no hard minimum. Compensation is worth
+  five points and can cost at most those five, and a posting that publishes
+  nothing scores full marks rather than being penalised for the silence.
 
 ### Personal feedback
 
-Each job card carries a **YES / MAYBE / NO** verdict, with an optional reason on
-a "no" (too operational, too junior, too commercial, too much consulting, wrong
-location, insufficient technical responsibility, insufficient leadership scope,
-compensation concern, other).
+Each job card carries a **YES / MAYBE / NO** verdict with an optional reason.
+The vocabulary mirrors what the two fit adjustments measure, so a verdict can
+later be compared against what the scorer believed:
+
+* *poor fit* - too stakeholder-heavy, too political / external, too
+  consulting-heavy, too hands-on IC, too software-development focused, too
+  little technical ownership, too little transformation scope, seniority too
+  low, compensation likely too low, location/work model poor
+* *good fit* - excellent technical ownership, excellent SRE / platform fit,
+  excellent transformation scope, excellent technical program fit
 
 A verdict is **recorded and nothing else**: it does not retrain the scorer,
 change a filter or hide the job. It is there for a later, explicit calibration
@@ -417,6 +488,7 @@ scorer so old and new cards read the same way.
 | `jobscanner/pipeline.py` | fetch → normalise → dedupe → filter → score → persist |
 | `jobscanner/compensation.py` | compensation estimator |
 | `jobscanner/ai/` | optional provider abstraction + cache + template fallback |
+| `jobscanner/fit.py` | Operating Style and Career Direction adjustments |
 | `jobscanner/apply/` | Playwright assistant, ATS adapters, field mapping |
 | `jobscanner/person.py` | the personal profile |
 | `jobscanner/documents.py` | document metadata; files stay on disk |
