@@ -48,6 +48,17 @@ match score, then by recency. Each card shows:
 * **Estimated compensation** - a CHF range with base / bonus / equity and a confidence
 * actions: Open job, Save, Apply, Analysis, Track application, Ignore
 
+A card action never moves the page. The card being worked on keeps its exact
+pixel position, the list is not rebuilt and a verdict never re-sorts the
+ranking under the reader - re-ranking happens on a scan or an explicit rescore,
+not while someone is reviewing.
+
+**Ignore** is reversible rather than guarded by a confirmation: the card leaves
+the list and the toast offers **UNDO**, which puts the job back where it was,
+in the state it had (a saved job comes back saved). Ignored jobs are never
+lost either - the **Ignored (n)** button next to *Scan* switches the same list
+to what was ignored, where every card offers **Restore**.
+
 No search box, no filters, no source configuration. All of that lives in Config.
 
 The second button, **Import LinkedIn Alert**, is described below.
@@ -523,7 +534,7 @@ scorer so old and new cards read the same way.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 398 tests
+.venv/bin/python -m pytest tests -q      # 427 tests
 .venv/bin/python run.py --reload         # auto-reload
 ```
 
