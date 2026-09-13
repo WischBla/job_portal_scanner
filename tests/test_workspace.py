@@ -509,5 +509,65 @@ class PortablePathTests(unittest.TestCase):
             self.assertNotIn(str(install.root), document['path'])
 
 
+class PrivateSupportDocumentTests(unittest.TestCase):
+    """Interview guides and the cheat sheet are stored, listed and exported -
+    but they are preparation material and must never reach an application."""
+
+    PRIVATE = (('interview_de', 'documents/interview'),
+               ('interview_en', 'documents/interview'),
+               ('cheat_sheet', 'documents/reference'))
+
+    def test_support_kinds_are_never_uploadable(self):
+        for kind, _ in self.PRIVATE:
+            self.assertIn(kind, documents_mod.KINDS)
+            self.assertNotIn(kind, documents_mod.UPLOADABLE_KINDS)
+            self.assertFalse(documents_mod.upload_allowed(kind))
+
+    def test_the_apply_assistant_cannot_choose_a_support_document(self):
+        from jobscanner.apply import assistant
+
+        with Installation('install'):
+            guide = documents_mod.store('interview_de', 'guide.pdf', b'%PDF-1.4 guide')
+            # Even if a support file were tagged primary, it is not a CV kind.
+            documents_mod.set_primary(guide['id'])
+            choice = assistant.document_choice(
+                {'apply_cv_language': 'de', 'apply_upload_cv': True,
+                 'apply_upload_motivation': True})
+            self.assertIsNone(choice['cv'])
+            self.assertIsNone(choice['motivation'])
+
+    def test_a_mis_tagged_primary_is_dropped_before_it_reaches_the_browser(self):
+        from jobscanner.apply import assistant
+
+        self.assertIsNone(assistant._uploadable({'kind': 'interview_en'}))
+        self.assertIsNone(assistant._uploadable({'kind': 'certificate'}))
+        self.assertEqual(assistant._uploadable({'kind': 'cv_de'})['kind'], 'cv_de')
+
+    def test_support_documents_survive_a_cross_directory_round_trip(self):
+        with Installation('source') as source:
+            seed(source)
+            stored = [documents_mod.store(kind, 'support.pdf',
+                                          b'%PDF-1.4 ' + kind.encode())
+                      for kind, _ in self.PRIVATE]
+            carrier = tempfile.mkdtemp(prefix='ws-carrier-')
+            archive = workspace.export_workspace(Path(carrier) / 'ws.zip')['archive']
+            with zipfile.ZipFile(archive) as bundle:
+                names = bundle.namelist()
+            for _, directory in self.PRIVATE:
+                self.assertTrue(any(n.startswith(directory + '/') for n in names),
+                                directory)
+            source.deactivate()
+
+            with Installation('destination'):
+                workspace.import_workspace(archive)
+                landed = {d['kind']: d for d in documents_mod.list_documents()}
+                for original in stored:
+                    document = landed[original['kind']]
+                    self.assertTrue(document['exists'])
+                    self.assertFalse(Path(document['path']).is_absolute())
+                    self.assertFalse(document['upload_allowed'])
+            shutil.rmtree(carrier, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -37,12 +37,27 @@ KINDS = {
     'cv_en': ('cv', 'CV (English)', 'en'),
     'motivation_de': ('motivation', 'Motivation letter (German)', 'de'),
     'motivation_en': ('motivation', 'Motivation letter (English)', 'en'),
+    'interview_de': ('interview', 'Interview guide (German)', 'de'),
+    'interview_en': ('interview', 'Interview guide (English)', 'en'),
+    'cheat_sheet': ('reference', 'Application cheat sheet', ''),
     'certificate': ('certificates', 'Certificate', ''),
     'reference': ('references', 'Employment reference', ''),
     'other': ('other', 'Other document', ''),
 }
 #: Kinds that only ever hold one current file.
 SINGLE_KINDS = ('cv_de', 'cv_en', 'motivation_de', 'motivation_en')
+
+#: The only kinds the apply assistant may ever attach to a job application.
+#: Everything else - interview guides, the cheat sheet, certificates and
+#: employment references - is private preparation material: it is stored,
+#: listed and exported like any other document but is never offered to a form.
+UPLOADABLE_KINDS = ('cv_de', 'cv_en', 'motivation_de', 'motivation_en')
+
+
+def upload_allowed(kind):
+    """May a document of this kind ever be attached to an application?"""
+    return kind in UPLOADABLE_KINDS
+
 
 ALLOWED_SUFFIXES = {'.pdf', '.doc', '.docx', '.odt', '.rtf', '.txt', '.md',
                     '.png', '.jpg', '.jpeg'}
@@ -134,6 +149,7 @@ def _decorate(data):
     data['exists'] = path.exists()
     data['absolute_path'] = str(path)
     data['kind_label'] = KINDS.get(data['kind'], ('', data['kind'], ''))[1]
+    data['upload_allowed'] = upload_allowed(data['kind'])
     return data
 
 
@@ -223,6 +239,7 @@ def delete(document_id, remove_file=True, conn=None):
 #: A category with no file is reported as "Not configured" - it is never
 #: invented, and no placeholder file is ever written to disk.
 CATEGORY_ORDER = ('cv_de', 'cv_en', 'motivation_de', 'motivation_en',
+                  'interview_de', 'interview_en', 'cheat_sheet',
                   'reference', 'certificate', 'other')
 
 
@@ -257,6 +274,7 @@ def categories(conn=None):
                 'configured': bool(present),
                 'count': len(files),
                 'files': [d['filename'] for d in files],
+                'upload_allowed': upload_allowed(kind),
             })
         return out
     finally:

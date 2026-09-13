@@ -736,12 +736,14 @@ function categoryTable(categories) {
   const statusClass = (status) => (status === 'Configured' ? 'status-ok'
     : (status === 'Missing file' ? 'status-broken' : 'status-missing'));
   return el('table', {}, [
-    el('thead', {}, [el('tr', {}, ['Category', 'Folder', 'Status', 'Files']
+    el('thead', {}, [el('tr', {}, ['Category', 'Folder', 'Status', 'Use', 'Files']
       .map((h) => el('th', { text: h })))]),
     el('tbody', {}, categories.map((cat) => el('tr', {}, [
       el('td', { text: cat.label }),
       el('td', {}, [el('code', { text: cat.directory })]),
       el('td', { class: statusClass(cat.status), text: cat.status }),
+      el('td', { class: 'muted', text: cat.upload_allowed
+        ? 'Application upload' : 'Private - never uploaded' }),
       el('td', { class: 'muted', text: cat.files.join(', ') || '-' }),
     ]))),
   ]);

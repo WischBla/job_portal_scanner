@@ -144,7 +144,14 @@ def build_report(controls, person, adapter, settings=None):
 
 
 def document_choice(settings, conn=None):
-    """Which CV / motivation letter the assistant should attach."""
+    """Which CV / motivation letter the assistant should attach.
+
+    Only the four application kinds can ever be returned here.  Interview
+    guides, the application cheat sheet, certificates and employment
+    references are private preparation material: ``_uploadable`` drops
+    anything outside :data:`documents.UPLOADABLE_KINDS`, so a mis-tagged row
+    can never end up attached to a form.
+    """
     settings = settings or {}
     language = (settings.get('apply_cv_language') or 'en').lower()
     cv = None
@@ -156,7 +163,14 @@ def document_choice(settings, conn=None):
         motivation = documents_mod.primary('motivation_{0}'.format(language), conn=conn) or \
                      documents_mod.primary('motivation_en' if language != 'en' else 'motivation_de',
                                            conn=conn)
-    return {'cv': cv, 'motivation': motivation}
+    return {'cv': _uploadable(cv), 'motivation': _uploadable(motivation)}
+
+
+def _uploadable(document):
+    """A document is only handed to the browser if its kind may be uploaded."""
+    if document and documents_mod.upload_allowed(document.get('kind')):
+        return document
+    return None
 
 
 class _Worker(threading.Thread):
