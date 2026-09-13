@@ -13,6 +13,19 @@ from .locations import canonical_location_name
 COUNTRY_MODES = ('strict', 'preferred', 'off')
 REMOTE_KEYS = ('allow_remote', 'allow_hybrid', 'allow_onsite')
 
+#: How the preferred-location lists are used.
+#:   'hard'    - a Swiss job in an unlisted city is rejected (old behaviour)
+#:   'ranking' - every Swiss job stays, listed cities simply score higher
+LOCATION_FILTER_MODES = ('hard', 'ranking')
+
+#: How a published salary is used.
+#:   'ignore'  - salary never influences anything
+#:   'ranking' - salary ranks, it never removes a job (recommended)
+#:   'hard'    - `minimum_salary_chf` becomes a hard filter
+SALARY_MODES = ('ignore', 'ranking', 'hard')
+
+SORT_MODES = ('score', 'newest', 'company', 'location')
+
 SENIORITY_LEVELS = [
     'Head of', 'Director', 'Senior Director', 'VP', 'Principal',
     'Senior Lead', 'Global Lead', 'Lead', 'Senior Manager', 'Manager', 'Other',
@@ -58,6 +71,16 @@ DEFAULT_EXCLUDE_TITLES = [
 
 DEFAULT_ALLOWED_LOCATIONS = ['Zurich', 'Zug', 'Luzern', 'Bern', 'Basel']
 DEFAULT_OPTIONAL_LOCATIONS = ['St. Gallen', 'Schwyz', 'Aargau', 'Lugano']
+DEFAULT_TERTIARY_LOCATIONS = []
+
+#: Domains that belong to a different career.  They cost points and are named
+#: as a concern - they never remove a posting, because the same word can appear
+#: in a genuinely technical role ("GTM Engineering Lead" is not "GTM Lead").
+DEFAULT_DEPRIORITIZED_KEYWORDS = []
+
+# Titles that are not the primary target but must never be thrown away for
+# "wrong seniority" - scope and responsibility decide, not the noun.
+DEFAULT_SECONDARY_TITLES = []
 
 DEFAULT_PROFILE = {
     'country_mode': 'strict',
@@ -79,17 +102,34 @@ DEFAULT_PROFILE = {
     'language_preferences': ['English', 'German'],
     'sources_enabled': [],           # empty list == "whatever job_sources says"
     'auto_hours': 12,
+    # -- added with the leadership preset -------------------------------
+    'tertiary_locations': list(DEFAULT_TERTIARY_LOCATIONS),
+    'secondary_titles': list(DEFAULT_SECONDARY_TITLES),
+    'location_filter_mode': 'hard',
+    'salary_mode': 'hard',
+    'salary_target_chf': 0,
+    'salary_floor_chf': 0,
+    'sort_mode': 'score',
+    'preset_key': '',
+    # -- added with the personal Swiss profile ---------------------------
+    'deprioritized_keywords': list(DEFAULT_DEPRIORITIZED_KEYWORDS),
+    'preferred_radius_km': 0,
+    'max_commute_minutes': 0,
 }
 
 _LIST_FIELDS = ['allowed_countries', 'allowed_locations', 'optional_locations',
-                'seniority_levels', 'include_titles', 'exclude_titles',
+                'tertiary_locations', 'seniority_levels', 'secondary_titles',
+                'include_titles', 'exclude_titles',
                 'required_keywords', 'preferred_keywords', 'excluded_keywords',
-                'language_preferences', 'sources_enabled']
+                'deprioritized_keywords', 'language_preferences', 'sources_enabled']
 _JSON_FIELDS = _LIST_FIELDS + ['remote_policy']
-_INT_FIELDS = ['hybrid_max_office_days', 'minimum_match_score', 'minimum_salary_chf', 'auto_hours']
+_INT_FIELDS = ['hybrid_max_office_days', 'minimum_match_score', 'minimum_salary_chf',
+               'salary_target_chf', 'salary_floor_chf', 'auto_hours',
+               'preferred_radius_km', 'max_commute_minutes']
 _BOOL_FIELDS = ['allow_missing_salary']
+_STR_FIELDS = ['country_mode', 'location_filter_mode', 'salary_mode', 'sort_mode', 'preset_key']
 
-FIELDS = ['country_mode'] + _JSON_FIELDS + _INT_FIELDS + _BOOL_FIELDS
+FIELDS = _STR_FIELDS + _JSON_FIELDS + _INT_FIELDS + _BOOL_FIELDS
 
 
 def clean_list(value):
@@ -112,6 +152,11 @@ def clean_list(value):
     return out
 
 
+def _as_choice(value, allowed, default):
+    text = str(value or '').strip().lower()
+    return text if text in allowed else default
+
+
 def _as_int(value, default, low, high):
     try:
         number = int(float(value))
@@ -131,6 +176,14 @@ def sanitize(payload):
 
     mode = str(data.get('country_mode') or DEFAULT_PROFILE['country_mode']).strip().lower()
     out['country_mode'] = mode if mode in COUNTRY_MODES else 'strict'
+    out['location_filter_mode'] = _as_choice(data.get('location_filter_mode'),
+                                             LOCATION_FILTER_MODES,
+                                             DEFAULT_PROFILE['location_filter_mode'])
+    out['salary_mode'] = _as_choice(data.get('salary_mode'), SALARY_MODES,
+                                    DEFAULT_PROFILE['salary_mode'])
+    out['sort_mode'] = _as_choice(data.get('sort_mode'), SORT_MODES, DEFAULT_PROFILE['sort_mode'])
+    # An empty preset_key means "this profile was configured by hand".
+    out['preset_key'] = str(data.get('preset_key') or '').strip()
 
     for field in _LIST_FIELDS:
         out[field] = clean_list(data.get(field, DEFAULT_PROFILE[field]))
@@ -138,8 +191,8 @@ def sanitize(payload):
     if not out['allowed_countries']:
         out['allowed_countries'] = list(DEFAULT_PROFILE['allowed_countries'])
     # Preferred locations are stored canonically ("Zürich" and "Zurich" are one).
-    out['allowed_locations'] = clean_list(canonical_location_name(x) for x in out['allowed_locations'])
-    out['optional_locations'] = clean_list(canonical_location_name(x) for x in out['optional_locations'])
+    for field in ('allowed_locations', 'optional_locations', 'tertiary_locations'):
+        out[field] = clean_list(canonical_location_name(x) for x in out[field])
 
     policy = data.get('remote_policy')
     if not isinstance(policy, dict):
@@ -155,7 +208,18 @@ def sanitize(payload):
                                          DEFAULT_PROFILE['minimum_match_score'], 0, 100)
     out['minimum_salary_chf'] = _as_int(data.get('minimum_salary_chf'),
                                         DEFAULT_PROFILE['minimum_salary_chf'], 0, 10_000_000)
+    out['salary_target_chf'] = _as_int(data.get('salary_target_chf'),
+                                       DEFAULT_PROFILE['salary_target_chf'], 0, 10_000_000)
+    out['salary_floor_chf'] = _as_int(data.get('salary_floor_chf'),
+                                      DEFAULT_PROFILE['salary_floor_chf'], 0, 10_000_000)
     out['auto_hours'] = _as_int(data.get('auto_hours'), DEFAULT_PROFILE['auto_hours'], 0, 168)
+    # Radius and commute are preferences the UI shows and the user reasons
+    # with; no filter reads them, so a Swiss job outside the radius is never
+    # rejected for being outside it.
+    out['preferred_radius_km'] = _as_int(data.get('preferred_radius_km'),
+                                         DEFAULT_PROFILE['preferred_radius_km'], 0, 2000)
+    out['max_commute_minutes'] = _as_int(data.get('max_commute_minutes'),
+                                         DEFAULT_PROFILE['max_commute_minutes'], 0, 600)
     out['allow_missing_salary'] = bool(data.get('allow_missing_salary', DEFAULT_PROFILE['allow_missing_salary']))
 
     if not out['seniority_levels']:
@@ -165,7 +229,7 @@ def sanitize(payload):
 
 def to_row(profile):
     """Serialise a sanitised profile into column values."""
-    row = {'country_mode': profile['country_mode']}
+    row = {field: str(profile.get(field) or '') for field in _STR_FIELDS}
     for field in _JSON_FIELDS:
         row[field] = json.dumps(profile[field], ensure_ascii=False)
     for field in _INT_FIELDS:
@@ -178,7 +242,9 @@ def to_row(profile):
 def from_row(row):
     """Deserialise a database row back into a profile dict."""
     data = dict(row or {})
-    out = {'country_mode': data.get('country_mode') or 'strict'}
+    out = {field: (data.get(field) if data.get(field) is not None else DEFAULT_PROFILE[field])
+           for field in _STR_FIELDS}
+    out['country_mode'] = out['country_mode'] or 'strict'
     for field in _JSON_FIELDS:
         try:
             value = json.loads(data.get(field) or 'null')

@@ -1,7 +1,9 @@
 @echo off
-REM Optional Windows convenience launcher. Not required.
-REM The canonical start command is:  python run.py
-cd /d %~dp0
-py run.py %*
-if errorlevel 1 python run.py %*
+REM Double-clickable launcher for Windows.
+cd /d "%~dp0"
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" run.py
+) else (
+    python run.py
+)
 pause

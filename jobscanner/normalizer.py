@@ -65,6 +65,23 @@ def normalize_published(value):
     return str(value).strip()
 
 
+def identity_key(company, title, city, raw_location=''):
+    """Same role, same employer, same place - regardless of which portal found it.
+
+    This is the fallback identity used when two sources publish one posting
+    under two different URLs (an aggregator and the company's own board).  It
+    is deliberately coarse, which is why the pipeline only applies it *across*
+    sources: within one source, two identical titles in one city are usually
+    two genuinely different openings.
+    """
+    company = fold(company)
+    title = fold(title)
+    if not company or not title:
+        return ''
+    place = fold(city) or fold(raw_location)
+    return _hash(company, title, place)
+
+
 def detect_seniority(title):
     text = fold(title)
     for label, patterns in SENIORITY_RULES:
@@ -114,6 +131,7 @@ class JobNormalizer:
             'salary_max': _as_float(raw.get('salary_max')),
             'salary_currency': str(raw.get('salary_currency') or '').strip().upper(),
             'salary_period': str(raw.get('salary_period') or '').strip(),
+            'identity_key': identity_key(company, title, verdict['normalized_city'], raw_location),
             'seniority': detect_seniority(title),
             'normalized_country': verdict['normalized_country'] or '',
             'normalized_city': verdict['normalized_city'] or '',

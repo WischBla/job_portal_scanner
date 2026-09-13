@@ -1,283 +1,72 @@
-<!doctype html>
-<html lang="de">
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Swiss Job Scanner + Bewerbungs-Tracker</title>
-  <link rel="stylesheet" href="styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Assistant</title>
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div>
-        <div class="eyebrow">JOB SEARCH CONTROL CENTER</div>
-        <h1>Swiss Job Scanner + Bewerbungs-Tracker</h1>
-        <p class="subtitle">Head · Director · Principal · Technical Leadership</p>
-      </div>
-      <div class="top-actions">
-        <button class="btn ghost" id="backupBtn">Backup</button>
-        <label class="btn ghost file-btn">Import<input id="importFile" type="file" accept="application/json"></label>
-        <button class="btn primary" id="newAppBtn">+ Neue Bewerbung</button>
-      </div>
-    </header>
 
-    <nav class="view-tabs" aria-label="Bereiche">
-      <button class="view-tab active" type="button" data-view="applicationsView">Bewerbungen <span id="appTabCount" class="tab-count">0</span></button>
-      <button class="view-tab" type="button" data-view="scoutView">Job Scout <span id="scoutTabCount" class="tab-count accent">0</span></button>
+<header class="topbar">
+  <div class="wrap">
+    <span class="brand">Job Assistant</span>
+    <nav id="nav">
+      <button class="tab" data-view="jobs">Jobs</button>
+      <button class="tab" data-view="applications">Applications</button>
+      <button class="tab" data-view="profile">Profile</button>
+      <button class="tab" data-view="config">Config</button>
     </nav>
-
-    <main>
-      <section id="applicationsView" class="app-view">
-        <section class="kpi-grid" aria-label="Kennzahlen">
-          <article class="kpi-card"><span>Gesamt</span><strong id="kpiTotal">0</strong></article>
-          <article class="kpi-card"><span>Aktiv</span><strong id="kpiActive">0</strong></article>
-          <article class="kpi-card"><span>Interview</span><strong id="kpiInterview">0</strong></article>
-          <article class="kpi-card"><span>Angebote</span><strong id="kpiOffers">0</strong></article>
-          <article class="kpi-card alert"><span>Follow-ups fällig</span><strong id="kpiFollowups">0</strong></article>
-          <article class="kpi-card"><span>Antwortquote</span><strong id="kpiResponse">0%</strong></article>
-        </section>
-
-        <section class="content-grid">
-          <div class="main-panel">
-            <div class="section-head">
-              <div><h2>Bewerbungen</h2><p>Alle Rollen, Status und nächste Schritte auf einen Blick.</p></div>
-              <div class="filters">
-                <input id="searchInput" type="search" placeholder="Firma, Position, Ort …" aria-label="Suchen">
-                <select id="statusFilter" aria-label="Status filtern"><option value="">Alle Status</option></select>
-                <select id="priorityFilter" aria-label="Priorität filtern"><option value="">Alle Prioritäten</option><option>A - Sehr interessant</option><option>B - Interessant</option><option>C - Opportunistisch</option></select>
-              </div>
-            </div>
-            <div id="applicationList" class="application-list"></div>
-            <div id="emptyState" class="empty-state hidden">
-              <div class="empty-icon">◎</div><h3>Noch keine Bewerbungen</h3>
-              <p>Lege eine Bewerbung an oder übernimm einen Treffer direkt aus dem Job Scout.</p>
-              <button class="btn primary" id="emptyNewBtn">Erste Bewerbung anlegen</button>
-            </div>
-          </div>
-
-          <aside class="side-panel">
-            <section class="side-card">
-              <div class="side-card-head"><h3>Heute wichtig</h3><span id="todayBadge" class="pill">0</span></div>
-              <div id="followupList" class="followup-list"></div>
-              <p id="noFollowups" class="muted">Keine fälligen Follow-ups. Verdächtig friedlich.</p>
-            </section>
-            <section class="side-card"><h3>Pipeline</h3><div id="pipelineList" class="pipeline-list"></div></section>
-            <section class="side-card scout-nudge">
-              <div class="side-card-head"><h3>Job Scout</h3><span id="scoutNewBadge" class="pill a">0 neu</span></div>
-              <p class="muted"><span id="scoutStrongText">0</span> starke Matches warten auf Prüfung.</p>
-              <button class="btn ghost full" type="button" data-switch-view="scoutView">Treffer ansehen</button>
-            </section>
-          </aside>
-        </section>
-      </section>
-
-      <section id="scoutView" class="app-view hidden">
-        <div class="scout-hero">
-          <div>
-            <div class="eyebrow">LOKALE SCHWEIZER JOB-SUCHE</div>
-            <h2>Job Scout</h2>
-            <p>Portale werden abgefragt, die Treffer aber <strong>lokal</strong> gefiltert: erst harte Filter (Geografie, Arbeitsmodell, Ausschlüsse), dann ein erklärbarer Match-Score.</p>
-          </div>
-          <div class="scout-actions">
-            <button class="btn ghost" id="sourcesBtn">Portale</button>
-            <button class="btn primary" id="runScoutBtn">Jobs scannen</button>
-          </div>
-        </div>
-
-        <div class="scout-statusbar">
-          <div>
-            <strong id="scoutRunStatus">Noch keine Suche ausgeführt.</strong>
-            <span id="scoutRunMeta" class="muted"></span>
-          </div>
-          <div class="source-note">Aktive Portale: <strong id="activeSourcesText">wird geladen …</strong></div>
-        </div>
-
-        <section class="scout-kpis" aria-label="Job-Scout-Kennzahlen">
-          <article><span>Letzter Scan</span><strong id="scoutKpiLastRun">—</strong></article>
-          <article><span>Portale gescannt</span><strong id="scoutKpiSources">0</strong></article>
-          <article><span>Neue passende Jobs</span><strong id="scoutKpiNew">0</strong></article>
-          <article><span>Gemerkt</span><strong id="scoutKpiSaved">0</strong></article>
-          <article><span>Übernommen</span><strong id="scoutKpiApplied">0</strong></article>
-        </section>
-
-        <div id="scoutError" class="provider-error hidden"></div>
-
-        <form id="filterPanel" class="filter-panel" aria-label="Suchfilter">
-          <div class="filter-panel-head">
-            <div><h3>Suchfilter</h3><p class="muted">Wird in SQLite gespeichert und genau so vom nächsten Scan verwendet.</p></div>
-            <span id="filterSavedAt" class="muted"></span>
-          </div>
-          <div class="filter-grid">
-            <label>Land
-              <select id="fCountry">
-                <option value="Switzerland">Schweiz</option>
-              </select>
-            </label>
-            <label>Modus
-              <select id="fCountryMode">
-                <option value="strict">Strict Switzerland</option>
-                <option value="preferred">Bevorzugt (Land muss erlaubt sein)</option>
-                <option value="off">Aus (keine Geo-Filterung)</option>
-              </select>
-            </label>
-            <label>Minimum Match
-              <input id="fMinScore" type="number" min="0" max="100" step="1">
-            </label>
-            <label>Max. Bürotage / Woche
-              <input id="fOfficeDays" type="number" min="0" max="5" step="1">
-            </label>
-
-            <fieldset class="filter-block span-2">
-              <legend>Standorte (Priorität)</legend>
-              <div id="fLocations" class="chip-checks"></div>
-              <input id="fLocationsExtra" placeholder="Weitere Orte, kommasepariert (z. B. Winterthur, Baar)">
-            </fieldset>
-
-            <fieldset class="filter-block">
-              <legend>Arbeitsmodell</legend>
-              <label class="form-check"><input type="checkbox" id="fRemote"> Remote</label>
-              <label class="form-check"><input type="checkbox" id="fHybrid"> Hybrid</label>
-              <label class="form-check"><input type="checkbox" id="fOnsite"> Onsite</label>
-            </fieldset>
-
-            <fieldset class="filter-block">
-              <legend>Seniorität</legend>
-              <div id="fSeniority" class="chip-checks"></div>
-            </fieldset>
-
-            <label class="span-2">Ausschlussbegriffe <small>Titel mit diesen Begriffen werden hart gefiltert</small>
-              <textarea id="fExcluded" rows="3"></textarea>
-            </label>
-            <label>Pflicht-Keywords <small>müssen alle vorkommen, leer = aus</small>
-              <textarea id="fRequired" rows="3"></textarea>
-            </label>
-            <label>Profil-Keywords <small>fliessen in den Score ein</small>
-              <textarea id="fPreferred" rows="3"></textarea>
-            </label>
-            <label>Gehalts-Untergrenze CHF <small>0 = nicht prüfen</small>
-              <input id="fMinSalary" type="number" min="0" step="5000">
-            </label>
-            <label>Auto-Suche <small>Stunden seit letztem Scan, 0 = aus</small>
-              <input id="fAutoHours" type="number" min="0" max="168" step="1">
-            </label>
-            <div class="check-stack">
-              <label class="form-check"><input type="checkbox" id="fAllowMissingSalary"> Jobs ohne Gehaltsangabe zulassen</label>
-            </div>
-          </div>
-          <div class="filter-actions">
-            <span id="filterHint" class="muted"></span>
-            <div class="spacer"></div>
-            <button type="button" class="btn ghost" id="resetFiltersBtn">Zurücksetzen</button>
-            <button type="submit" class="btn primary" id="saveFiltersBtn">SAVE FILTERS</button>
-          </div>
-        </form>
-
-        <section class="main-panel scout-panel">
-          <div class="section-head">
-            <div><h2>Passende Stellen</h2><p id="scoutResultHint">Nur Jobs, die alle harten Filter bestanden haben.</p></div>
-            <div class="filters scout-filters">
-              <input id="scoutSearch" type="search" placeholder="Firma, Titel, Skill …" aria-label="Scout durchsuchen">
-              <select id="scoutStateFilter">
-                <option value="">Aktive Treffer</option>
-                <option value="NEW">Neu</option>
-                <option value="SEEN">Gesehen</option>
-                <option value="SAVED">Gemerkt</option>
-                <option value="APPLIED">Übernommen</option>
-                <option value="IGNORED">Ignoriert</option>
-              </select>
-              <label class="compact-check"><input type="checkbox" id="scoutNewOnly"> Nur neue</label>
-            </div>
-          </div>
-          <div id="scoutJobList" class="scout-job-list"></div>
-          <div id="scoutEmpty" class="empty-state">
-            <div class="empty-icon">⌕</div><h3>Noch keine Job-Treffer</h3>
-            <p>Filter prüfen, dann „Jobs scannen“. Wenn nichts übrig bleibt, zeigt der Bereich „Warum Jobs gefiltert wurden“ den Grund.</p>
-            <button class="btn primary" type="button" id="scoutEmptySearch">Jetzt suchen</button>
-          </div>
-        </section>
-
-        <details id="rejectedPanel" class="rejected-panel">
-          <summary>Warum Jobs gefiltert wurden <span id="rejectedCount" class="pill">0</span></summary>
-          <div id="rejectedSummary" class="rejected-summary"></div>
-          <div id="rejectedList" class="rejected-list"></div>
-        </details>
-      </section>
-    </main>
   </div>
+</header>
 
-  <div class="modal-backdrop hidden" id="appModal" role="dialog" aria-modal="true" aria-labelledby="appModalTitle">
-    <div class="modal large">
-      <div class="modal-head"><div><div class="eyebrow">BEWERBUNG</div><h2 id="appModalTitle">Neue Bewerbung</h2></div><button class="icon-btn" data-close="appModal" aria-label="Schliessen">×</button></div>
-      <form id="appForm">
-        <input type="hidden" id="appId">
-        <div class="form-grid">
-          <label>Unternehmen *<input id="company" required></label>
-          <label>Position *<input id="position" required></label>
-          <label>Level<select id="level"><option></option><option>Head of</option><option>Director</option><option>Senior Director</option><option>Principal</option><option>Senior / Lead</option><option>Andere</option></select></label>
-          <label>Ort / Kanton<input id="location"></label>
-          <label>Arbeitsmodell<select id="workModel"><option></option><option>Remote</option><option>Hybrid</option><option>Onsite</option></select></label>
-          <label>Quelle<select id="source"><option></option><option>LinkedIn</option><option>jobs.ch</option><option>Unternehmenswebsite</option><option>Recruiter / Headhunter</option><option>Empfehlung / Netzwerk</option><option>Job Scout · Jobicy</option><option>Job Scout · Arbeitnow</option><option>Job Scout · Remotive</option><option>Andere</option></select></label>
-          <label class="span-2">Stellenlink<input id="jobUrl" type="url" placeholder="https://…"></label>
-          <label>Beworben am<input id="appliedDate" type="date"></label>
-          <label>Status<select id="status"></select></label>
-          <label>Priorität<select id="priority"><option>A - Sehr interessant</option><option selected>B - Interessant</option><option>C - Opportunistisch</option></select></label>
-          <label>Gehaltsband CHF<input id="salaryRange" placeholder="z. B. 280–350k TC"></label>
-          <label>Letzte Rückmeldung<input id="lastResponse" type="date"></label>
-          <label>Follow-up am<input id="followUpDate" type="date"></label>
-          <label class="span-2">Nächste Aktion<input id="nextAction" placeholder="z. B. Recruiter am Freitag nachfassen"></label>
-          <label>Kontaktperson<input id="contactName"></label>
-          <label>Kontakt / E-Mail / LinkedIn<input id="contactDetails"></label>
-          <label>CV-Version<input id="cvVersion" placeholder="z. B. Director EN v3"></label>
-          <label>Motivationsschreiben<input id="coverLetter" placeholder="z. B. Roche EN v1"></label>
-          <label class="span-2">Kurzinfo / Ergebnis<textarea id="summary" rows="3"></textarea></label>
-          <label class="span-2">Notizen<textarea id="notes" rows="4"></textarea></label>
-        </div>
-        <div class="form-actions"><button type="button" class="btn danger hidden" id="deleteAppBtn">Bewerbung löschen</button><div class="spacer"></div><button type="button" class="btn ghost" data-close="appModal">Abbrechen</button><button type="submit" class="btn primary">Speichern</button></div>
-      </form>
+<main class="wrap" id="main">
+
+  <!-- ============================ JOBS ============================ -->
+  <section id="view-jobs" class="view">
+    <div class="action-row">
+      <button id="scan-btn" class="primary">Scan for new jobs</button>
+      <span id="scan-status" class="muted"></span>
     </div>
-  </div>
+    <div id="job-summary" class="summary"></div>
+    <div id="scan-summary" class="scan-summary" hidden></div>
+    <div id="job-list" class="list"></div>
+  </section>
 
-  <div class="modal-backdrop hidden" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
-    <div class="modal large detail-modal">
-      <div class="modal-head"><div><div class="eyebrow">BEWERBUNGSVERLAUF</div><h2 id="detailTitle">Details</h2><p id="detailSubtitle" class="muted"></p></div><button class="icon-btn" data-close="detailModal" aria-label="Schliessen">×</button></div>
-      <div class="detail-toolbar"><button class="btn ghost" id="editFromDetailBtn">Bearbeiten</button><a class="btn ghost hidden" id="jobLinkBtn" target="_blank" rel="noopener noreferrer">Stellenanzeige öffnen</a><button class="btn primary" id="newEventBtn">+ Rückmeldung / Ereignis</button></div>
-      <div class="detail-summary" id="detailSummary"></div>
-      <div class="timeline-head"><h3>Verlauf</h3><span class="muted">Jede E-Mail, jedes Gespräch, jede Entscheidung.</span></div>
-      <div id="timeline" class="timeline"></div><div id="timelineEmpty" class="empty-inline hidden">Noch keine Ereignisse dokumentiert.</div>
+  <!-- ======================== APPLICATIONS ======================== -->
+  <section id="view-applications" class="view">
+    <div class="action-row">
+      <button id="new-application" class="primary">New application</button>
+      <span id="application-status" class="muted"></span>
     </div>
-  </div>
+    <div id="pipeline" class="pipeline"></div>
+    <div id="application-list" class="list"></div>
+  </section>
 
-  <div class="modal-backdrop hidden" id="eventModal" role="dialog" aria-modal="true" aria-labelledby="eventModalTitle">
-    <div class="modal">
-      <div class="modal-head"><div><div class="eyebrow">VERLAUF</div><h2 id="eventModalTitle">Ereignis hinzufügen</h2></div><button class="icon-btn" data-close="eventModal" aria-label="Schliessen">×</button></div>
-      <form id="eventForm"><div class="form-grid">
-        <label>Datum<input id="eventDate" type="date" required></label><label>Ereignis<select id="eventType"><option>Bewerbung versendet</option><option>Eingangsbestätigung</option><option>E-Mail</option><option>Telefonat</option><option>HR-Screening</option><option>Interview</option><option>Case / Assessment</option><option>Follow-up</option><option>Angebot</option><option>Absage</option><option>Sonstiges</option></select></label>
-        <label class="span-2">Von / Mit wem<input id="eventPerson" placeholder="Name, Recruiter, Hiring Manager …"></label><label class="span-2">Kurznotiz / Ergebnis<textarea id="eventNote" rows="4"></textarea></label><label class="span-2">Nächster Schritt<input id="eventNextStep"></label><label>Follow-up am<input id="eventFollowUp" type="date"></label>
-      </div><div class="form-actions"><div class="spacer"></div><button type="button" class="btn ghost" data-close="eventModal">Abbrechen</button><button type="submit" class="btn primary">Ereignis speichern</button></div></form>
+  <!-- =========================== PROFILE ========================== -->
+  <section id="view-profile" class="view">
+    <div id="profile-form"></div>
+  </section>
+
+  <!-- ============================ CONFIG ========================== -->
+  <section id="view-config" class="view">
+    <div id="config-body"></div>
+  </section>
+
+</main>
+
+<div id="dialog" class="dialog" hidden>
+  <div class="dialog-card">
+    <div class="dialog-head">
+      <h2 id="dialog-title"></h2>
+      <button id="dialog-close" class="ghost" aria-label="Close">Close</button>
     </div>
+    <div id="dialog-body" class="dialog-body"></div>
   </div>
+</div>
 
-  <div class="modal-backdrop hidden" id="sourcesModal" role="dialog" aria-modal="true" aria-labelledby="sourcesTitle">
-    <div class="modal large">
-      <div class="modal-head"><div><div class="eyebrow">JOB-PORTALE</div><h2 id="sourcesTitle">Quellen verwalten</h2><p class="muted">Allgemeine Portale scannen oder gezielt Karriereseiten von Unternehmen überwachen.</p></div><button class="icon-btn" data-close="sourcesModal" aria-label="Schliessen">×</button></div>
-      <div id="sourcesList" class="source-list"></div>
-      <form id="sourceForm" class="source-add-form">
-        <h3>Quelle hinzufügen</h3>
-        <div class="form-grid">
-          <label>Name<input id="sourceName" required placeholder="z. B. Roche Careers"></label>
-          <label>Typ<select id="sourceType"><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option><option value="rss">RSS / Atom Feed</option></select></label>
-          <label id="sourceCompanyWrap">Unternehmen <small>optional</small><input id="sourceCompany" placeholder="z. B. Roche"></label>
-          <label id="sourceTokenWrap">Board Token / Site<input id="sourceToken" required placeholder="Greenhouse board token"></label>
-          <label id="sourceRegionWrap" class="hidden">Lever Region<select id="sourceRegion"><option value="global">Global</option><option value="eu">EU</option></select></label>
-          <label id="sourceUrlWrap" class="span-2 hidden">Feed URL<input id="sourceUrl" type="url" placeholder="https://…/jobs.xml"></label>
-        </div>
-        <div class="form-actions"><div class="spacer"></div><button type="submit" class="btn primary">Quelle hinzufügen</button></div>
-      </form>
-      <p class="muted source-help">Greenhouse und Lever nutzen deren öffentliche Stellen-APIs. RSS funktioniert für Portale oder Firmen, die einen Job-Feed anbieten. LinkedIn/jobs.ch werden nicht per inoffiziellem Scraper abgegriffen.</p>
-    </div>
-  </div>
+<div id="toast" class="toast" hidden></div>
 
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

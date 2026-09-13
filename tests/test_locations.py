@@ -133,5 +133,63 @@ class CanonicalNameTests(unittest.TestCase):
         self.assertEqual(canonical_location_name('Winterthur'), 'Winterthur')
 
 
+class ForeignCityGapTests(unittest.TestCase):
+    """Cities the company sources actually surface must not fall through.
+
+    A posting whose structured location is a foreign city used to reach the
+    description-evidence fallback, where a company boilerplate line like "we
+    have offices in Geneva" was enough to call it Swiss.  Recognising the city
+    keeps the Swiss gate as strict as it was meant to be.
+    """
+
+    BOILERPLATE = 'We have offices in Geneva, Switzerland, Bochum and Annecy.'
+
+    def verdict(self, location):
+        return LocationNormalizer().normalize(
+            location, title='Head of Platform Engineering', description=self.BOILERPLATE)
+
+    def test_a_foreign_city_is_not_rescued_by_a_swiss_mention_in_the_text(self):
+        for location, country in [('Bochum', 'Germany'), ('Annecy', 'France'),
+                                  ('Ho Chi Minh City', 'Vietnam'),
+                                  ('San Mateo, CA', 'United States')]:
+            with self.subTest(location=location):
+                verdict = self.verdict(location)
+                self.assertFalse(verdict['switzerland_eligible'], location)
+                self.assertEqual(verdict['normalized_country'], country)
+
+    def test_every_swiss_location_in_the_brief_is_still_accepted(self):
+        for location in ('Zurich', 'Zürich', 'Zug', 'Lucerne', 'Luzern', 'Bern', 'Basel',
+                         'St. Gallen', 'Schwyz', 'Aargau', 'Geneva', 'Genève', 'Lugano',
+                         'Switzerland', 'Remote Switzerland'):
+            with self.subTest(location=location):
+                self.assertTrue(self.verdict(location)['switzerland_eligible'], location)
+
+    def test_a_swiss_eligible_posting_never_displays_a_foreign_city(self):
+        """A multi-site posting is eligible for its Swiss option, so say so."""
+        verdict = LocationNormalizer().normalize(
+            'Baden, Aargau, Switzerland | Dalmine, Bergamo, Italy | Krakow, Poland')
+        self.assertTrue(verdict['switzerland_eligible'])
+        self.assertEqual(verdict['normalized_country'], 'Switzerland')
+        self.assertEqual(verdict['normalized_region'], 'Aargau')
+        self.assertNotEqual(verdict['normalized_city'], 'Krakow')
+
+    def test_a_swiss_city_still_wins_over_the_foreign_ones(self):
+        verdict = LocationNormalizer().normalize('Krakow, Poland | Zurich, Switzerland')
+        self.assertEqual(verdict['normalized_city'], 'Zurich')
+
+    def test_a_foreign_posting_still_reports_its_own_city(self):
+        verdict = LocationNormalizer().normalize('Krakow, Poland')
+        self.assertFalse(verdict['switzerland_eligible'])
+        self.assertEqual(verdict['normalized_city'], 'Krakow')
+
+    def test_generic_regions_are_still_rejected_without_swiss_evidence(self):
+        for location in ('Germany', 'Remote Germany', 'Europe', 'EU', 'EMEA', 'DACH'):
+            with self.subTest(location=location):
+                verdict = LocationNormalizer().normalize(
+                    location, title='Head of Platform Engineering',
+                    description='A great role in a great team.')
+                self.assertFalse(verdict['switzerland_eligible'], location)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,9 +1,20 @@
-# Job Portal Scanner + Application Tracker
+# Personal job discovery and application assistant.
 #
-# This project intentionally uses only the Python standard library.
-# There are no third-party dependencies to install.
+#     python3 -m venv .venv
+#     .venv/bin/pip install -r requirements.txt
+#     .venv/bin/python -m playwright install chromium
+#     .venv/bin/python run.py
 #
-# Running the following is therefore safe but does nothing:
-#     python3 -m pip install -r requirements.txt
-#
-# Requires: Python 3.8 or newer.
+# Requires Python 3.9 or newer.
+
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+
+# Application assistant (opens the real application form and prefills it).
+# The app starts without it; the Apply button then reports that it is missing.
+playwright>=1.40
+
+# Tests
+pytest>=8.0
+httpx>=0.27

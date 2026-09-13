@@ -1,59 +1,57 @@
 #!/usr/bin/env python3
-"""Launcher for the local Job Portal Scanner + Application Tracker.
+"""Launcher for the personal job assistant.
 
-Usage:
-    python3 run.py
+    python3 run.py                 # start and open the browser
+    python3 run.py --no-browser
     python3 run.py --port 9000
 
-This file only orchestrates startup (configuration, directories, database
-init, backend server, browser). All application logic lives in app.py.
+    python3 run.py export-workspace ~/Desktop/job-assistant-backup.zip
+    python3 run.py import-workspace ~/Desktop/job-assistant-backup.zip
+
+This file only orchestrates startup: dependency check, directories, database
+migration (with a backup), the server and the browser.  All application logic
+lives in the ``jobscanner`` package.
 """
 
-# --- Python version gate -----------------------------------------------------
-# Kept deliberately free of modern syntax so that an old interpreter still
-# reaches this message instead of dying with a SyntaxError.
 import sys
 
-MIN_PYTHON = (3, 8)
-
+MIN_PYTHON = (3, 9)
 if sys.version_info < MIN_PYTHON:
-    sys.stderr.write(
-        "Python {0}.{1} or newer is required, but this is Python {2}.\n"
-        "On macOS try:  python3 run.py\n".format(
-            MIN_PYTHON[0], MIN_PYTHON[1], sys.version.split()[0]
-        )
-    )
+    sys.stderr.write('Python {0}.{1} or newer is required, but this is Python {2}.\n'.format(
+        MIN_PYTHON[0], MIN_PYTHON[1], sys.version.split()[0]))
     raise SystemExit(1)
 
-import argparse
-import errno
-import os
-import signal
-import socket
-import sqlite3
-import threading
-import time
-import urllib.error
-import urllib.request
-import webbrowser
-from pathlib import Path
+import argparse  # noqa: E402
+import os  # noqa: E402
+import socket  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+import webbrowser  # noqa: E402
+from pathlib import Path  # noqa: E402
 
-# Always resolve relative to this file, never to the terminal's cwd.
 BASE_DIR = Path(__file__).resolve().parent
-
 DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 8765
-STARTUP_TIMEOUT = 20.0  # seconds to wait for the server to answer HTTP
+STARTUP_TIMEOUT = 25.0
+
+REQUIREMENTS_HINT = (
+    'Install the dependencies first:\n\n'
+    '    python3 -m venv .venv\n'
+    '    .venv/bin/pip install -r requirements.txt\n'
+    '    .venv/bin/python -m playwright install chromium\n\n'
+    'and then start the app with:\n\n'
+    '    .venv/bin/python run.py\n'
+)
 
 
 def say(message=''):
-    """Print a startup line immediately, even when output is piped to a file."""
     sys.stdout.write(message + '\n')
     sys.stdout.flush()
 
 
 def fail(message, hint=None):
-    """Print a readable error (no stack trace) and exit."""
     sys.stdout.flush()
     sys.stderr.write('\nStartup failed: ' + message + '\n')
     if hint:
@@ -61,206 +59,132 @@ def fail(message, hint=None):
     raise SystemExit(1)
 
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser(
-        prog='run.py',
-        description='Start the local Job Portal Scanner + Application Tracker.',
-    )
-    parser.add_argument('--port', type=int, default=DEFAULT_PORT,
-                        help='TCP port to listen on (default: %(default)s)')
-    parser.add_argument('--host', default=DEFAULT_HOST,
-                        help='Address to bind to (default: %(default)s, local only)')
-    parser.add_argument('--no-browser', action='store_true',
-                        help='Do not open a browser window automatically')
-    args = parser.parse_args(argv)
-    if not 1 <= args.port <= 65535:
-        parser.error('--port must be between 1 and 65535')
-    return args
+def check_dependencies():
+    missing = []
+    for module, package in (('fastapi', 'fastapi'), ('uvicorn', 'uvicorn[standard]'),
+                            ('multipart', 'python-multipart')):
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    if missing:
+        fail('missing Python packages: {0}.'.format(', '.join(missing)), REQUIREMENTS_HINT)
 
 
-def ensure_directories():
-    """Create local directories the app needs, and verify the frontend is present."""
-    (BASE_DIR / 'data').mkdir(parents=True, exist_ok=True)
-
-    static_dir = BASE_DIR / 'static'
-    if not (static_dir / 'index.html').is_file():
-        fail(
-            'the frontend files are missing (expected {0}).'.format(static_dir / 'index.html'),
-            'Make sure the whole project folder was unzipped, not just run.py.',
-        )
-
-
-def load_backend():
-    """Import the existing backend module (app.py) with a readable error on failure."""
-    if not (BASE_DIR / 'app.py').is_file():
-        fail(
-            'the backend is missing (expected {0}).'.format(BASE_DIR / 'app.py'),
-            'Make sure the whole project folder was unzipped, not just run.py.',
-        )
-
-    if str(BASE_DIR) not in sys.path:
-        sys.path.insert(0, str(BASE_DIR))
-    try:
-        import app  # noqa: F401  (the backend; imported for its server + db API)
-    except ModuleNotFoundError as exc:
-        fail(
-            'a required Python package is missing: {0}'.format(exc.name),
-            'Missing Python dependencies.\n\nRun:\n\n'
-            '    python3 -m pip install -r requirements.txt',
-        )
-    except ImportError as exc:
-        fail('the backend (app.py) could not be imported: {0}'.format(exc))
-    except SyntaxError as exc:
-        fail('app.py contains a syntax error (line {0}): {1}'.format(exc.lineno, exc.msg))
-
-    for attr in ('create_server', 'init_db', 'DB_PATH'):
-        if not hasattr(app, attr):
-            fail(
-                "the backend does not provide '{0}' - app.py looks outdated.".format(attr),
-                'Update app.py to the version that ships with this launcher.',
-            )
-    return app
-
-
-def port_in_use(host, port):
-    """Best-effort check whether something already listens on host:port."""
+def port_is_free(host, port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.settimeout(0.5)
-        return probe.connect_ex((host, port)) == 0
-
-
-def start_server(app, host, port):
-    """Ask the backend for a bound server, translating bind errors into advice."""
-    if port_in_use(host, port):
-        fail(
-            'port {0} on {1} is already in use.'.format(port, host),
-            'Another copy of the tracker is probably still running.\n'
-            'Open http://{0}:{1} in your browser, or start on a free port:\n\n'
-            '    python3 run.py --port {2}'.format(host, port, port + 1),
-        )
-    try:
-        return app.create_server(host, port)
-    except OSError as exc:
-        if exc.errno in (errno.EADDRINUSE,):
-            fail(
-                'port {0} on {1} is already in use.'.format(port, host),
-                'Start on a different port:\n\n    python3 run.py --port {0}'.format(port + 1),
-            )
-        if exc.errno in (errno.EACCES, errno.EPERM):
-            fail(
-                'permission denied for port {0}.'.format(port),
-                'Ports below 1024 need administrator rights. Pick a higher port:\n\n'
-                '    python3 run.py --port 8765',
-            )
-        if exc.errno == errno.EADDRNOTAVAIL:
-            fail('the address {0} is not available on this machine.'.format(host))
-        fail('the server could not be started: {0}'.format(exc))
-    except sqlite3.Error as exc:
-        fail(
-            'the database could not be opened or initialised: {0}'.format(exc),
-            'Check that {0} exists and is writable.'.format(BASE_DIR / 'data'),
-        )
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+            return True
+        except OSError:
+            return False
 
 
 def wait_until_ready(url, timeout=STARTUP_TIMEOUT):
-    """Poll the server until it actually answers HTTP (or the timeout expires)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1.0):
-                return True
-        except urllib.error.HTTPError:
-            return True  # answering with a status code means it is up
+            with urllib.request.urlopen(url + '/api/health', timeout=2) as response:
+                if response.status == 200:
+                    return True
         except (urllib.error.URLError, OSError):
-            time.sleep(0.15)
+            time.sleep(0.25)
     return False
 
 
-def install_stop_handlers():
-    """Return an Event that is set on Ctrl+C or a termination request.
+def prepare_data():
+    """Migrate the database (backing it up first) and create the document folders."""
+    from jobscanner import db as jsdb
+    from jobscanner import documents as documents_mod
 
-    Installing the handler explicitly also covers the case where the process was
-    started in a context that had SIGINT set to "ignore".
-    """
-    stop = threading.Event()
-
-    def _request_stop(signum, frame):
-        stop.set()
-
-    for sig_name in ('SIGINT', 'SIGTERM', 'SIGHUP'):
-        sig = getattr(signal, sig_name, None)
-        if sig is None:
-            continue
-        try:
-            signal.signal(sig, _request_stop)
-        except (ValueError, OSError, RuntimeError):
-            pass  # not supported on this platform / not the main thread
-    return stop
+    adopted = False
+    if not jsdb.get_db_path().exists() and jsdb.LEGACY_DB_PATH.exists():
+        adopted = True
+    jsdb.init_db()
+    documents_mod.ensure_dirs()
+    if adopted:
+        say('Existing database carried over from {0} (the original file is untouched).'.format(
+            jsdb.LEGACY_DB_PATH.name))
+    say('Database:  {0}'.format(jsdb.get_db_path()))
+    say('Documents: {0}'.format(documents_mod.documents_dir()))
 
 
-def display_db_path(app):
-    """Show the database path relative to the project when possible."""
-    db_path = Path(app.DB_PATH)
-    try:
-        return os.path.join('.', str(db_path.relative_to(BASE_DIR)))
-    except ValueError:
-        return str(db_path)
+#: Verbs handled by tools/workspace.py rather than by the server.  They are
+#: recognised before argparse so the launcher's own flags stay unambiguous.
+WORKSPACE_VERBS = {'export-workspace': 'export', 'import-workspace': 'import',
+                   'inspect-workspace': 'inspect'}
 
 
-def main(argv=None):
-    args = parse_args(argv)
+def run_workspace_command(argv):
+    """Delegate ``run.py export-workspace <path>`` to the workspace CLI."""
+    sys.path.insert(0, str(BASE_DIR))
+    from tools import workspace as workspace_cli
+
+    return workspace_cli.main([WORKSPACE_VERBS[argv[0]]] + list(argv[1:]))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Personal job discovery and application assistant.')
+    parser.add_argument('--host', default=os.environ.get('JOB_ASSISTANT_HOST', DEFAULT_HOST))
+    parser.add_argument('--port', type=int,
+                        default=int(os.environ.get('JOB_ASSISTANT_PORT', DEFAULT_PORT)))
+    parser.add_argument('--no-browser', action='store_true',
+                        default=os.environ.get('JOB_ASSISTANT_NO_BROWSER') == '1')
+    parser.add_argument('--reload', action='store_true', help='development auto-reload')
+    args = parser.parse_args()
+
+    os.chdir(str(BASE_DIR))
+    sys.path.insert(0, str(BASE_DIR))
+
+    say()
+    say('Job Assistant')
+    say('=============')
+    check_dependencies()
+    prepare_data()
+
+    if not port_is_free(args.host, args.port):
+        fail('port {0} is already in use.'.format(args.port),
+             'Another copy may already be running. Open http://{0}:{1} or use --port.'.format(
+                 args.host, args.port))
+
     url = 'http://{0}:{1}'.format(args.host, args.port)
-
-    say('Job Tracker starting...')
-
-    ensure_directories()
-    app = load_backend()
-
-    server = start_server(app, args.host, args.port)
-    # Keep the backend's module globals consistent with what we actually bound to.
-    app.HOST, app.PORT = args.host, args.port
-
-    say('Database: ' + display_db_path(app))
-    say('Server:   ' + url)
-    if args.host not in ('127.0.0.1', 'localhost', '::1'):
-        say('Warning:  bound to ' + args.host + ' - reachable from other machines.')
+    say('URL:       {0}'.format(url))
     say()
 
-    thread = threading.Thread(target=server.serve_forever, name='http-server', daemon=True)
-    thread.start()
-    stop = install_stop_handlers()
+    import uvicorn
 
-    if not wait_until_ready(url):
-        server.shutdown()
-        server.server_close()
-        fail('the server did not respond within {0:.0f} seconds.'.format(STARTUP_TIMEOUT))
+    if args.reload:
+        uvicorn.run('app:app', host=args.host, port=args.port, reload=True, log_level='info')
+        return 0
 
-    if args.no_browser:
-        say('Browser not opened (--no-browser). Open ' + url + ' manually.')
-    elif webbrowser.open(url):
-        say('Browser opened.')
-    else:
-        say('Could not open a browser automatically. Open ' + url + ' manually.')
+    config = uvicorn.Config('app:app', host=args.host, port=args.port, log_level='warning')
+    server = uvicorn.Server(config)
 
-    say()
-    say('Press Ctrl+C to stop.')
+    def open_browser():
+        if wait_until_ready(url) and not args.no_browser:
+            webbrowser.open(url)
 
+    threading.Thread(target=open_browser, name='open-browser', daemon=True).start()
+    say('Starting... press Ctrl+C to stop.')
     try:
-        while thread.is_alive() and not stop.is_set():
-            stop.wait(0.5)
+        server.run()
     except KeyboardInterrupt:
         pass
     finally:
-        say()
-        say('Stopping...')
-        server.shutdown()
-        server.server_close()
-        say('Job Tracker stopped.')
+        try:
+            from jobscanner.apply import SERVICE
+            SERVICE.close()
+        except Exception:  # noqa: BLE001 - shutdown must stay quiet
+            pass
+        say('Job Assistant stopped.')
     return 0
 
 
 if __name__ == '__main__':
     try:
+        if len(sys.argv) > 1 and sys.argv[1] in WORKSPACE_VERBS:
+            raise SystemExit(run_workspace_command(sys.argv[1:]))
         raise SystemExit(main())
     except KeyboardInterrupt:
         raise SystemExit(0)

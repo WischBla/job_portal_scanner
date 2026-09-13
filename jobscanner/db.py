@@ -7,19 +7,31 @@ safe and preserves existing application-tracker data.
 
 import json
 import os
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import presets as presets_mod
 from . import profile as profile_mod
+from . import schema_v2
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = BASE_DIR / 'data' / 'applications.db'
+DATA_DIR = BASE_DIR / 'data'
+DEFAULT_DB_PATH = DATA_DIR / 'app.db'
+#: V1 database of the original scanner.  It is adopted, never deleted.
+LEGACY_DB_PATH = DATA_DIR / 'applications.db'
 
 # Overridable for tests via set_db_path() or the JOB_TRACKER_DB env variable.
 _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 4
+#: Root of the portable workspace: ``data/`` and ``documents/`` live under it.
+#: Everything the user owns is addressed *relative* to this directory and never
+#: by an absolute path, so the whole workspace can be archived on one machine
+#: and unpacked into a different checkout on another.
+_WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
+
+SCHEMA_VERSION = 9
 
 
 def set_db_path(path):
@@ -32,6 +44,21 @@ def get_db_path():
     return _DB_PATH
 
 
+def set_workspace_root(path):
+    """Point ``documents/`` and every relative document path at another root.
+
+    Used by the workspace import/export round trip and by the tests that prove
+    a workspace really is machine independent.
+    """
+    global _WORKSPACE_ROOT
+    _WORKSPACE_ROOT = Path(path).resolve()
+    return _WORKSPACE_ROOT
+
+
+def workspace_root():
+    return _WORKSPACE_ROOT
+
+
 def now_iso():
     return datetime.now().replace(microsecond=0).isoformat()
 
@@ -40,8 +67,46 @@ def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
+def adopt_legacy_database():
+    """Carry the V1 database over to data/app.db on first V2 start.
+
+    The original file stays exactly where it is - it becomes the untouched
+    pre-migration copy of the user's data.
+    """
+    if _DB_PATH != DEFAULT_DB_PATH or _DB_PATH.exists() or not LEGACY_DB_PATH.exists():
+        return False
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(LEGACY_DB_PATH), str(_DB_PATH))
+    return True
+
+
+def backup_dir():
+    """Backups always live next to the database that is actually in use."""
+    return _DB_PATH.parent / 'backups'
+
+
+def backup_database(tag='migration', keep=15):
+    """Timestamped copy of the live database; returns the path or ''."""
+    if not _DB_PATH.exists():
+        return ''
+    target_dir = backup_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    target = target_dir / '{0}-{1}-{2}.db'.format(_DB_PATH.stem, tag, stamp)
+    shutil.copy2(str(_DB_PATH), str(target))
+    # Keep the folder from growing without bound; the newest copies are enough.
+    copies = sorted(target_dir.glob('*.db'), key=lambda p: p.stat().st_mtime, reverse=True)
+    for stale in copies[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return str(target)
+
+
 def connect():
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    adopt_legacy_database()
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys = ON')
@@ -216,6 +281,126 @@ CREATE TABLE IF NOT EXISTS rejected_jobs (
 CREATE INDEX IF NOT EXISTS idx_rejected_run ON rejected_jobs(run_id);
 '''
 
+# --- migration 005: built-in presets, stored separately from the active profile ---
+PRESETS_DDL = '''
+CREATE TABLE IF NOT EXISTS search_presets (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    career_summary TEXT NOT NULL DEFAULT '',
+    is_recommended INTEGER NOT NULL DEFAULT 0,
+    is_builtin INTEGER NOT NULL DEFAULT 1,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+'''
+
+# --- migration 005: company watchlist ------------------------------------
+WATCHLIST_DDL = '''
+CREATE TABLE IF NOT EXISTS company_watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    priority TEXT NOT NULL DEFAULT 'B',
+    career_source_type TEXT NOT NULL DEFAULT 'manual',
+    career_source_identifier TEXT NOT NULL DEFAULT '',
+    career_url TEXT NOT NULL DEFAULT '',
+    source_id INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    last_scan_at TEXT NOT NULL DEFAULT '',
+    last_scan_status TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(source_id) REFERENCES job_sources(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_watchlist_priority ON company_watchlist(priority, company_name);
+'''
+
+# --- migration 007: per-source health so a broken integration is never silent ---
+SOURCE_HEALTH_COLUMNS = (
+    ('source_url', "TEXT NOT NULL DEFAULT ''"),
+    ('source_status', "TEXT NOT NULL DEFAULT 'MANUAL'"),
+    ('last_checked_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_error', "TEXT NOT NULL DEFAULT ''"),
+    ('job_count_last_scan', 'INTEGER NOT NULL DEFAULT 0'),
+)
+JOB_SOURCE_HEALTH_COLUMNS = (
+    ('last_status', "TEXT NOT NULL DEFAULT ''"),
+    ('last_checked_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_error', "TEXT NOT NULL DEFAULT ''"),
+    ('last_job_count', 'INTEGER NOT NULL DEFAULT 0'),
+)
+
+#: Marks a one-shot data migration as done, so it can correct seeded rows once
+#: without ever overwriting an edit the user made afterwards.
+SEED_MARKER_KEY = 'company_source_seed'
+SEED_MARKER_VALUE = '1'
+
+#: Seed list: (company, priority, careers URL).
+#: Every company starts as ``manual``; an automated source is attached below
+#: only where a real public endpoint was verified against the live service.
+WATCHLIST_SEED = [
+    ('Google', 'A', 'https://www.google.com/about/careers/applications/jobs/results/?location=Switzerland'),
+    ('Microsoft', 'A', 'https://jobs.careers.microsoft.com/global/en/search?lc=Switzerland'),
+    ('Amazon Web Services / AWS', 'A', 'https://www.amazon.jobs/en/search?loc_query=Switzerland'),
+    ('Meta', 'B', 'https://www.metacareers.com/jobs'),
+    ('NVIDIA', 'A', 'https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite'),
+    ('IBM', 'B', 'https://www.ibm.com/careers/search'),
+    ('Red Hat', 'B', 'https://www.redhat.com/en/jobs'),
+    ('UBS', 'A', 'https://jobs.ubs.com/'),
+    ('SIX', 'A', 'https://www.six-group.com/en/company/careers.html'),
+    ('Swiss Re', 'A', 'https://careers.swissre.com/'),
+    ('Zurich Insurance', 'A', 'https://www.careers.zurich.com/'),
+    ('Swisscom', 'A', 'https://www.swisscom.ch/en/about/career.html'),
+    ('PostFinance', 'B', 'https://www.postfinance.ch/en/about-us/jobs-career.html'),
+    ('Roche', 'A', 'https://careers.roche.com/global/en'),
+    ('Novartis', 'A', 'https://www.novartis.com/careers'),
+    ('ABB', 'A', 'https://careers.abb/'),
+    ('Hitachi Energy', 'A', 'https://www.hitachienergy.com/careers'),
+    ('Siemens Switzerland', 'B', 'https://jobs.siemens.com/careers?location=Switzerland'),
+    ('Zuehlke', 'B', 'https://www.zuehlke.com/en/careers'),
+    ('Adnovum', 'B', 'https://www.adnovum.com/en/company/careers'),
+    ('Avaloq', 'B', 'https://www.avaloq.com/careers'),
+    ('Scandit', 'B', 'https://www.scandit.com/careers/'),
+    ('Proton', 'B', 'https://proton.me/careers'),
+    # Priority C: Swiss technology employers that were added because a public
+    # endpoint could actually be verified, not because they were on the brief.
+    ('On', 'C', 'https://www.on.com/en-ch/careers'),
+    ('SonarSource', 'C', 'https://www.sonarsource.com/company/careers/'),
+    ('ANYbotics', 'C', 'https://www.anybotics.com/careers/'),
+    ('Nexthink', 'C', 'https://www.nexthink.com/careers'),
+]
+
+#: company -> (source kind, identifier).  Each pair below was confirmed with a
+#: live request that returned real, current postings for that company on
+#: 2026-09-12.  Nothing is guessed: a token that 404s, answers empty or belongs
+#: to a different employer is not listed here, and the company stays MANUAL.
+#:
+#: Companies deliberately absent: Google, Microsoft, Meta, IBM and NVIDIA
+#: publish no stable public feed; UBS and Avaloq answer automated requests with
+#: HTTP 403 and must not be worked around; Swisscom, Zuehlke, Red Hat and
+#: Hitachi Energy are Workday-only, which the brief excludes as a discovery
+#: source; PostFinance, Novartis and Siemens render their result lists in the
+#: browser, so there is nothing server-side to read.
+VERIFIED_COMPANY_SOURCES = {
+    'Amazon Web Services / AWS': ('amazon_jobs', 'CHE'),
+    'Roche': ('phenom', 'https://careers.roche.com'),
+    'ABB': ('phenom', 'https://careers.abb'),
+    'Swiss Re': ('successfactors', 'https://careers.swissre.com'),
+    'SIX': ('successfactors', 'https://jobs.six-group.com'),
+    'Zurich Insurance': ('successfactors', 'https://www.careers.zurich.com'),
+    'Adnovum': ('successfactors', 'https://careers.adnovum.com'),
+    'Proton': ('greenhouse', 'proton'),
+    'Scandit': ('greenhouse', 'scandit'),
+    'On': ('greenhouse', 'onrunning'),
+    'SonarSource': ('lever', 'sonarsource'),
+    'ANYbotics': ('lever', 'anybotics'),
+    'Nexthink': ('smartrecruiters', 'Nexthink'),
+}
+
 DEFAULT_SOURCES = [
     ('Arbeitnow', 'arbeitnow', '{}', 1),
     ('Remotive', 'remotive', '{}', 1),
@@ -227,6 +412,7 @@ LEGACY_STATE_MAP = {
     'Neu': 'NEW',
     'Gesehen': 'SEEN',
     'Gemerkt': 'SAVED',
+    'Gespeichert': 'SAVED',
     'Ignoriert': 'IGNORED',
     'Übernommen': 'APPLIED',
     'Abgelaufen': 'EXPIRED',
@@ -238,6 +424,8 @@ def migrate(conn):
     conn.executescript(BASE_SCHEMA)
     conn.executescript(SEARCH_PROFILE_DDL)
     conn.executescript(REJECTED_DDL)
+    conn.executescript(PRESETS_DDL)
+    conn.executescript(WATCHLIST_DDL)
 
     # -- discovered_jobs: normalized location + explainable scoring ---------
     _add_column(conn, 'discovered_jobs', 'source_type', "TEXT NOT NULL DEFAULT ''")
@@ -278,9 +466,66 @@ def migrate(conn):
     _add_column(conn, 'scout_runs', 'sources_scanned', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'rejected_count', 'INTEGER NOT NULL DEFAULT 0')
     _add_column(conn, 'scout_runs', 'profile_snapshot', "TEXT NOT NULL DEFAULT '{}'")
+    _add_column(conn, 'scout_runs', 'geo_passed_count', 'INTEGER NOT NULL DEFAULT 0')
+
+    # -- search_profile: fields introduced with the leadership preset ------
+    _add_column(conn, 'search_profile', 'tertiary_locations', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'secondary_titles', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'location_filter_mode', "TEXT NOT NULL DEFAULT 'hard'")
+    _add_column(conn, 'search_profile', 'salary_mode', "TEXT NOT NULL DEFAULT 'hard'")
+    _add_column(conn, 'search_profile', 'salary_target_chf', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'salary_floor_chf', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'sort_mode', "TEXT NOT NULL DEFAULT 'score'")
+    _add_column(conn, 'search_profile', 'preset_key', "TEXT NOT NULL DEFAULT ''")
+
+    # -- migration 008: down-ranking and commute preferences ----------------
+    # Low-relevance domains are a *ranking* signal, not a gate: they cost
+    # points and say so, instead of silently removing a posting that happens
+    # to mention the wrong word.
+    _add_column(conn, 'search_profile', 'deprioritized_keywords', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'preferred_radius_km', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'max_commute_minutes', 'INTEGER NOT NULL DEFAULT 0')
+
+    # -- migration 008: personal YES / MAYBE / NO feedback -------------------
+    # Recorded for later calibration only.  Nothing here feeds back into the
+    # scorer; a verdict is data about the user, not a new filter rule.
+    _add_column(conn, 'discovered_jobs', 'feedback', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_reason', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_note', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_at', "TEXT NOT NULL DEFAULT ''")
+
+    # -- company_watchlist / job_sources: source resolution + health --------
+    for column, ddl in SOURCE_HEALTH_COLUMNS:
+        _add_column(conn, 'company_watchlist', column, ddl)
+    for column, ddl in JOB_SOURCE_HEALTH_COLUMNS:
+        _add_column(conn, 'job_sources', column, ddl)
+    conn.execute("UPDATE company_watchlist SET source_status='MANUAL' "
+                 "WHERE source_status NOT IN ('ACTIVE','MANUAL','UNAVAILABLE','ERROR')")
+
+    # -- scout_runs: the scan summary the Jobs screen shows ------------------
+    _add_column(conn, 'scout_runs', 'companies_scanned', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'swiss_eligible_count', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'duplicate_count', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'scout_runs', 'source_failure_count', 'INTEGER NOT NULL DEFAULT 0')
 
     _seed_sources(conn)
+    _seed_presets(conn)
+    _seed_watchlist(conn)
+    _attach_verified_company_sources(conn)
+    _merge_duplicate_sources(conn)
     _seed_profile(conn)
+    schema_v2.migrate_v2(conn, now_iso(), profile=load_profile(conn))
+
+    # -- migration 009: the parts of the person that had nowhere to live ----
+    # Career achievements, CliftonStrengths and travel willingness are private
+    # matching / interview context.  They are stored, never auto-inserted into
+    # a generated document.
+    _add_column(conn, 'person_profile', 'secondary_target_roles', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'person_profile', 'travel_willingness', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'person_profile', 'strengths', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'person_profile', 'achievements', "TEXT NOT NULL DEFAULT '[]'")
+
+    _portabilise_document_paths(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
@@ -295,11 +540,229 @@ def _seed_sources(conn):
             [(n, t, c, e, ts, ts) for n, t, c, e in DEFAULT_SOURCES])
 
 
+def _seed_presets(conn):
+    """Keep the built-in presets in sync with the code.
+
+    Presets are code-owned, so an upsert is safe: it never touches the active
+    profile in ``search_profile``, only the catalogue the UI offers.
+    """
+    ts = now_iso()
+    for preset in presets_mod.all_presets():
+        conn.execute(
+            '''INSERT INTO search_presets (key,name,description,career_summary,is_recommended,
+                    is_builtin,payload_json,created_at,updated_at)
+               VALUES (?,?,?,?,?,1,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET
+                    name=excluded.name, description=excluded.description,
+                    career_summary=excluded.career_summary,
+                    is_recommended=excluded.is_recommended,
+                    payload_json=excluded.payload_json, updated_at=excluded.updated_at''',
+            (preset['key'], preset['name'], preset.get('description') or '',
+             preset.get('career_summary') or '', 1 if preset.get('is_recommended') else 0,
+             json.dumps(preset['profile'], ensure_ascii=False), ts, ts))
+
+
+def _seed_watchlist(conn):
+    """Seed the company watchlist once; user edits are never overwritten."""
+    ts = now_iso()
+    for company, priority, url in WATCHLIST_SEED:
+        conn.execute(
+            '''INSERT OR IGNORE INTO company_watchlist
+                 (company_name,enabled,priority,career_source_type,career_source_identifier,
+                  career_url,notes,last_scan_at,last_scan_status,source_status,
+                  created_at,updated_at)
+               VALUES (?,1,?,'manual','',?,'','','','MANUAL',?,?)''',
+            (company, priority, url, ts, ts))
+
+
+def _attach_verified_company_sources(conn):
+    """Attach the verified public endpoints - exactly once.
+
+    Run unconditionally this would fight the user: re-attaching a source they
+    detached, or resetting a priority they changed.  A marker in ``schema_meta``
+    makes it a one-shot data migration instead, so an existing database is
+    upgraded on the first start after this release and never touched again.
+
+    Only entries that are still untouched (``manual`` with no identifier) get a
+    source, and the seeded priority is only corrected while it still matches
+    what an earlier release seeded.
+    """
+    from .watchlist import CompanyWatchlist   # local: watchlist imports this module
+
+    done = conn.execute('SELECT value FROM schema_meta WHERE key=?',
+                        (SEED_MARKER_KEY,)).fetchone()
+    if done and str(done[0]) == SEED_MARKER_VALUE:
+        return
+
+    seeded_priorities = {name: priority for name, priority, _ in WATCHLIST_SEED}
+    watchlist = CompanyWatchlist(conn)
+    for entry in watchlist.list():
+        name = entry['company_name']
+        payload = {}
+        wanted_priority = seeded_priorities.get(name)
+        if wanted_priority and entry.get('priority') != wanted_priority:
+            payload['priority'] = wanted_priority
+        source = VERIFIED_COMPANY_SOURCES.get(name)
+        if source and entry.get('career_source_type') == 'manual' and \
+                not entry.get('career_source_identifier'):
+            payload['career_source_type'], payload['career_source_identifier'] = source
+        if payload:
+            watchlist.update(entry['id'], payload)
+
+    conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
+                 (SEED_MARKER_KEY, SEED_MARKER_VALUE))
+
+
+def _merge_duplicate_sources(conn):
+    """Fold a hand-made source into the watchlist entry that now owns that board.
+
+    Someone who added "Proton Careers" by hand before the watchlist could do it
+    would otherwise end up fetching the same Greenhouse board twice - once as
+    their own source and once as ``Watchlist - Proton``.  The older row wins so
+    the user's original entry (and its id) is what survives; the redundant one
+    is removed and the watchlist points at what is left.
+
+    Safe to run on every start: once there is nothing duplicated, it does
+    nothing.
+    """
+    from .sources import registry
+
+    owned = conn.execute(
+        'SELECT w.id AS watch_id, s.id AS source_id, s.source_type, s.config_json '
+        'FROM company_watchlist w JOIN job_sources s ON s.id = w.source_id').fetchall()
+    orphans = conn.execute(
+        'SELECT id, source_type, config_json FROM job_sources '
+        'WHERE id NOT IN (SELECT source_id FROM company_watchlist WHERE source_id IS NOT NULL)'
+    ).fetchall()
+    if not owned or not orphans:
+        return
+
+    def identity(source_type, config_json):
+        try:
+            kind = registry.get_kind(source_type)
+        except Exception:       # noqa: BLE001 - an aggregator has no identity field
+            return None
+        if not kind.identity_field:
+            return None
+        try:
+            config = json.loads(config_json or '{}')
+        except (TypeError, ValueError):
+            return None
+        value = str(config.get(kind.identity_field) or '').strip().rstrip('/').casefold()
+        return (source_type, value) if value else None
+
+    by_identity = {}
+    for row in orphans:
+        key = identity(row['source_type'], row['config_json'])
+        if key and key not in by_identity:
+            by_identity[key] = row['id']
+
+    merged = []
+    for row in owned:
+        key = identity(row['source_type'], row['config_json'])
+        orphan_id = by_identity.get(key)
+        if orphan_id is None or orphan_id == row['source_id']:
+            continue
+        keep, drop = sorted((orphan_id, row['source_id']))
+        conn.execute('UPDATE company_watchlist SET source_id=? WHERE id=?', (keep, row['watch_id']))
+        conn.execute('DELETE FROM job_sources WHERE id=?', (drop,))
+        by_identity.pop(key, None)
+        merged.append(row['watch_id'])
+    if not merged:
+        return
+
+    # Re-sync so the surviving row reads as the watchlist source it now is.
+    from .watchlist import CompanyWatchlist
+    watchlist = CompanyWatchlist(conn)
+    for watch_id in merged:
+        watchlist.update(watch_id, {})
+
+
+def _portabilise_document_paths(conn):
+    """Rewrite any absolute document path as a workspace-relative one.
+
+    Older rows (and anything written before the workspace became portable)
+    could hold ``/Users/<someone>/.../documents/cv/x.pdf``.  That path is
+    meaningless on another machine, so it is reduced to ``documents/cv/x.pdf``
+    here.  The conversion is additive and conservative: a row is only rewritten
+    when a ``documents/`` segment can actually be found in it, and the file on
+    disk is never touched.
+    """
+    if not _table_exists(conn, 'documents'):
+        return 0
+    changed = 0
+    for row in conn.execute('SELECT id, path FROM documents').fetchall():
+        portable = portable_document_path(row['path'])
+        if portable and portable != str(row['path'] or ''):
+            conn.execute('UPDATE documents SET path=? WHERE id=?', (portable, row['id']))
+            changed += 1
+    return changed
+
+
+def portable_document_path(path):
+    """``<anything>/documents/cv/x.pdf`` -> ``documents/cv/x.pdf``.
+
+    Returns '' when the value carries no ``documents/`` segment at all, which
+    means it cannot be made portable and is better left exactly as it is.
+    """
+    text = str(path or '').strip().replace('\\', '/')
+    if not text:
+        return ''
+    if text.startswith('documents/'):
+        return text
+    parts = text.split('/')
+    if 'documents' in parts:
+        return '/'.join(parts[parts.index('documents'):])
+    return ''
+
+
+def load_presets(conn):
+    """Every stored preset, newest built-ins first, recommended on top."""
+    rows = conn.execute('SELECT * FROM search_presets ORDER BY is_recommended DESC, name').fetchall()
+    out = []
+    for row in rows:
+        data = row_to_dict(row)
+        try:
+            payload = json.loads(data.get('payload_json') or '{}')
+        except (TypeError, ValueError):
+            payload = {}
+        data.pop('payload_json', None)
+        data['is_recommended'] = bool(data.get('is_recommended'))
+        data['is_builtin'] = bool(data.get('is_builtin'))
+        data['profile'] = profile_mod.sanitize(payload)
+        data['summary'] = presets_mod.summarize(data['profile'])
+        out.append(data)
+    return out
+
+
+def get_preset(conn, key):
+    for preset in load_presets(conn):
+        if preset['key'] == key:
+            return preset
+    return None
+
+
+def apply_preset(conn, key):
+    """Copy a preset into the active search profile.
+
+    This is the ONLY path by which a preset reaches the profile the scanner
+    uses.  Migrations and application updates never do it implicitly.
+    """
+    preset = get_preset(conn, key)
+    if preset is None:
+        raise ValueError('Unknown search preset: {0}'.format(key))
+    payload = dict(preset['profile'])
+    payload['preset_key'] = preset['key']
+    return save_profile(conn, payload)
+
+
 def _seed_profile(conn):
     """Create the canonical profile row, carrying over the legacy profile once."""
     if conn.execute('SELECT id FROM search_profile WHERE id=1').fetchone():
         return
-    data = dict(profile_mod.DEFAULT_PROFILE)
+    # A brand new database starts on the recommended preset - there is nothing
+    # to preserve yet.  An existing profile row is never touched here.
+    data = presets_mod.recommended_profile()
 
     if _table_exists(conn, 'job_search_profile'):
         legacy = conn.execute('SELECT * FROM job_search_profile WHERE id=1').fetchone()
@@ -359,6 +822,10 @@ def _seed_profile(conn):
             }
             # min_score is intentionally NOT carried over: the old scale mixed a
             # location bonus into the score, so the numbers are not comparable.
+            #
+            # Carrying legacy values over means the result is no longer exactly
+            # the recommended preset - say so, so the UI offers "restore".
+            data['preset_key'] = ''
 
     row = profile_mod.to_row(profile_mod.sanitize(data))
     columns = ['id'] + list(row.keys()) + ['updated_at']
@@ -367,9 +834,22 @@ def _seed_profile(conn):
         ','.join(columns), ','.join('?' for _ in columns)), values)
 
 
-def init_db():
+def schema_version(conn):
+    row = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+    try:
+        return int(row[0]) if row else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def init_db(backup=True):
+    """Open, back up (only when the schema actually changes) and migrate."""
+    existed = _DB_PATH.exists() or LEGACY_DB_PATH.exists()
     conn = connect()
     try:
+        current = schema_version(conn) if _table_exists(conn, 'schema_meta') else 0
+        if backup and existed and current != SCHEMA_VERSION:
+            backup_database('v{0}'.format(current or 'pre'))
         migrate(conn)
     finally:
         conn.close()
