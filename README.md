@@ -1,6 +1,6 @@
 # Job Assistant
 
-A personal job discovery and application assistant for **one user**: Sebastian Bierwisch.
+A personal job discovery and application assistant built for **a single user**.
 
 It finds senior technology leadership roles that can realistically be worked from
 Switzerland, explains why each one fits, estimates what it is likely to pay, helps
@@ -60,7 +60,7 @@ themselves into the timeline.
 
 ### Profile
 
-Who Sebastian is: personal and contact data, LinkedIn, nationality and work
+Who you are: personal and contact data, LinkedIn, nationality and work
 authorisation, relocation, languages, availability and notice period,
 compensation expectations, career history, technical skills, leadership profile,
 target roles and target geography.
@@ -243,9 +243,9 @@ Confidence:    Medium
 ```
 
 No fake precision: when only the baseline applies the range is wide and the
-confidence says so. Sebastian's targets (minimum CHF 235-250k, target CHF
-280-350k+, Big Tech CHF 350k+) live in Profile and rank results; they never
-reject one.
+confidence says so. Your own compensation targets live in Profile - they are
+local workspace data, never part of this repository - and they rank results;
+they never reject one.
 
 The market-data table is editable under Config → Salary Model.
 
