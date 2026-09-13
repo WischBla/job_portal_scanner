@@ -2,9 +2,10 @@
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from .. import alert_import
 from .. import applications as applications_mod
 from .. import jobs_service, pipeline
 from ..ai import service as ai_service
@@ -211,6 +212,62 @@ def create_application_from_job(job_id: int):
     if application is None:
         raise HTTPException(404, 'Job not found')
     return application
+
+
+# -- manual LinkedIn job-alert import --------------------------------------
+# The whole feature is a file the user already has on disk.  Nothing here logs
+# in to LinkedIn, scrapes a page or opens a mailbox.
+class ImportPayload(BaseModel, extra='ignore'):
+    jobs: list = []
+
+
+class DescriptionPayload(BaseModel, extra='ignore'):
+    description: str = ''
+
+
+@router.post('/jobs/import/linkedin/preview')
+async def preview_linkedin_alert(file: UploadFile = File(None), text: str = Form('')):
+    """Parse a saved alert and say what would happen. Nothing is written."""
+    if file is not None and getattr(file, 'filename', ''):
+        entries = alert_import.parse_alert(filename=file.filename, data=await file.read())
+    elif text.strip():
+        entries = alert_import.parse_alert(text=text)
+    else:
+        raise HTTPException(400, 'Choose a .txt / .eml file or paste the alert text.')
+    with connect() as conn:
+        result = alert_import.preview(entries, conn)
+    if not result['found']:
+        raise HTTPException(
+            400, 'No jobs found in that alert. Save the e-mail as plain text (.txt) and retry.')
+    return result
+
+
+@router.post('/jobs/import/linkedin')
+def import_linkedin_alert(payload: ImportPayload):
+    """Store the entries the user ticked in the preview."""
+    if not payload.jobs:
+        raise HTTPException(400, 'Select at least one job to import.')
+    with connect() as conn:
+        result = alert_import.import_entries(payload.jobs, conn)
+        result['jobs'] = jobs_service.list_cards(conn, limit=200)
+        result['counts'] = jobs_service.counts(conn)
+    return result
+
+
+@router.post('/jobs/{job_id}/description')
+def add_job_description(job_id: int, payload: DescriptionPayload):
+    """Paste the description an alert could not carry, then re-score.
+
+    The re-score is the normal pipeline - base match score plus the Operating
+    Style and Career Direction adjustments - not something LinkedIn-specific.
+    """
+    try:
+        card = alert_import.add_description(job_id, payload.description)
+    except alert_import.AlertImportError as exc:
+        raise HTTPException(400, str(exc))
+    if card is None:
+        raise HTTPException(404, 'Job not found')
+    return card
 
 
 @router.post('/jobs/rescore')

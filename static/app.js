@@ -174,10 +174,21 @@ function jobCard(job) {
         job.is_new ? el('span', { class: 'badge new', text: 'new' }) : null,
         job.state === 'SAVED' ? el('span', { class: 'badge', text: 'saved' }) : null,
         job.state === 'APPLIED' ? el('span', { class: 'badge', text: 'applied' }) : null,
+        job.needs_details ? el('span', { class: 'badge warn', text: 'needs details' }) : null,
       ]),
       el('div', { class: 'card-meta', html: meta.filter(Boolean).map(escapeHtml).join('<span class="sep">/</span>') }),
     ]),
   ]);
+
+  /* An alert gave us a title, a company and a link - and no description. The
+     score is shown, but the card says plainly what it was computed from. */
+  const incomplete = job.needs_details
+    ? el('div', { class: 'needs-details' }, [
+      el('span', { text: 'Needs job description - the fit score is based on the title alone.' }),
+      el('button', { class: 'small', text: 'Add description',
+        onclick: () => addDescriptionDialog(job) }),
+    ])
+    : null;
 
   const detail = el('div', { class: 'detail' }, [
     el('div', { class: 'block' }, [
@@ -203,6 +214,7 @@ function jobCard(job) {
       el('div', { class: 'kv', html: [
         job.seniority ? 'Seniority: <b>' + escapeHtml(job.seniority) + '</b>' : '',
         job.source ? 'Source: <b>' + escapeHtml(job.source) + '</b>' : '',
+        job.discovered_via === 'linkedin' ? 'Discovered via: <b>LinkedIn alert</b>' : '',
         job.office_days ? 'Office days: <b>' + job.office_days + '</b>' : '',
       ].filter(Boolean).join('<br>') }),
     ]),
@@ -239,7 +251,7 @@ function jobCard(job) {
   ]);
 
   return el('div', { class: 'card' + (job.state === 'IGNORED' ? ' ignored' : '') },
-    [head, detail, verdict, actions]);
+    [head, incomplete, detail, verdict, actions]);
 }
 
 function escapeHtml(value) {
@@ -340,6 +352,122 @@ function renderScanSummary(result) {
     node.appendChild(el('div', { class: 'scan-failure',
       text: error.source + ' - ' + error.error }));
   });
+}
+
+/* ------------------- Import LinkedIn Alert (manual) -------------------
+   The user saves the alert e-mail as .txt (or .eml) and hands the file over,
+   or pastes its text. Nothing logs in to LinkedIn and no mailbox is opened:
+   this is a file that is already on the user's disk. */
+function importLinkedInDialog() {
+  const fileInput = el('input', { type: 'file', name: 'file', accept: '.txt,.eml,text/plain,message/rfc822' });
+  const pasted = el('textarea', { name: 'text', rows: 8,
+    placeholder: 'Or paste the alert e-mail text here.' });
+  const status = el('div', { class: 'muted' });
+  const result = el('div', { class: 'import-preview' });
+
+  const preview = async () => {
+    const body = new FormData();
+    if (fileInput.files && fileInput.files[0]) body.append('file', fileInput.files[0]);
+    body.append('text', pasted.value || '');
+    status.textContent = 'Reading alert...';
+    clear(result);
+    try {
+      const data = await api('/api/jobs/import/linkedin/preview', { method: 'POST', body });
+      status.textContent = '';
+      renderAlertPreview(result, data);
+    } catch (err) {
+      status.textContent = '';
+      toast(err.message, true);
+    }
+  };
+
+  const body = el('div', { class: 'form' }, [
+    field('LinkedIn alert file', fileInput, 'Save the job-alert e-mail as .txt or .eml.'),
+    field('Pasted text', pasted, 'Used when no file is chosen.'),
+    el('div', { class: 'card-actions' }, [
+      el('button', { class: 'small primary', text: 'Preview', onclick: preview }),
+      el('button', { class: 'small ghost', text: 'Cancel', onclick: closeDialog }),
+    ]),
+    status,
+    result,
+  ]);
+  dialog('Import LinkedIn Alert', body);
+}
+
+/* Nothing is stored until the user ticks entries and confirms. */
+function renderAlertPreview(wrap, data) {
+  clear(wrap);
+  wrap.appendChild(el('h3', { text: data.found + ' jobs found' }));
+  wrap.appendChild(el('div', { class: 'muted',
+    text: data.new + ' new  ·  ' + data.known + ' already known' }));
+
+  const boxes = [];
+  data.jobs.forEach((job, index) => {
+    const box = el('input', { type: 'checkbox', name: 'pick_' + index });
+    box.checked = job.status === 'NEW';
+    boxes.push({ box, job });
+    wrap.appendChild(el('label', { class: 'import-row' }, [
+      box,
+      el('div', {}, [
+        el('div', { class: 'import-title', text: job.title }),
+        el('div', { class: 'muted',
+          text: [job.company, job.location].filter(Boolean).join('  ·  ') }),
+        el('div', { class: 'muted' }, [
+          el('span', { class: 'badge' + (job.status === 'NEW' ? ' new' : ''), text: job.status }),
+          job.match_reason ? el('span', { text: ' ' + job.match_reason }) : null,
+        ]),
+      ]),
+    ]));
+  });
+
+  wrap.appendChild(el('div', { class: 'card-actions' }, [
+    el('button', { class: 'small primary', text: 'Import selected', onclick: async (event) => {
+      const chosen = boxes.filter((entry) => entry.box.checked).map((entry) => entry.job);
+      if (!chosen.length) { toast('Nothing selected.', true); return; }
+      event.target.disabled = true;
+      try {
+        const outcome = await api('/api/jobs/import/linkedin',
+          { method: 'POST', body: { jobs: chosen } });
+        closeDialog();
+        await loadJobs();
+        toast(outcome.imported + ' imported, ' + outcome.linked + ' already known');
+      } catch (err) {
+        event.target.disabled = false;
+        toast(err.message, true);
+      }
+    } }),
+    el('button', { class: 'small ghost', text: 'Cancel', onclick: closeDialog }),
+  ]));
+}
+
+/* An imported alert entry carries no description, so it carries no reliable
+   fit score either. The user pastes the real text and the normal pipeline
+   scores it - there is no LinkedIn-specific scoring. */
+function addDescriptionDialog(job) {
+  const box = textarea('description', '');
+  box.setAttribute('rows', '14');
+  const body = el('div', { class: 'form' }, [
+    field('Job description', box,
+      'Paste the full description from the posting. It is scored by the normal '
+      + 'Personal Fit pipeline.'),
+    el('div', { class: 'card-actions' }, [
+      el('button', { class: 'small primary', text: 'Save and score', onclick: async (event) => {
+        event.target.disabled = true;
+        try {
+          await api('/api/jobs/' + job.id + '/description',
+            { method: 'POST', body: { description: box.value } });
+          closeDialog();
+          await loadJobs();
+          toast('Description saved. The job was re-scored.');
+        } catch (err) {
+          event.target.disabled = false;
+          toast(err.message, true);
+        }
+      } }),
+      el('button', { class: 'small ghost', text: 'Cancel', onclick: closeDialog }),
+    ]),
+  ]);
+  dialog('Add description - ' + job.title, body);
 }
 
 async function showAnalysis(job) {
@@ -1393,6 +1521,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab').forEach((tab) =>
     tab.addEventListener('click', () => switchView(tab.dataset.view)));
   $('#scan-btn').addEventListener('click', scan);
+  $('#import-linkedin-btn').addEventListener('click', importLinkedInDialog);
   $('#new-application').addEventListener('click', newApplicationDialog);
   $('#dialog-close').addEventListener('click', closeDialog);
   $('#dialog').addEventListener('click', (event) => { if (event.target.id === 'dialog') closeDialog(); });

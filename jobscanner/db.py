@@ -31,7 +31,7 @@ _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 #: and unpacked into a different checkout on another.
 _WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def set_db_path(path):
@@ -528,6 +528,19 @@ def migrate(conn):
     # rescore their personal fit is simply their base score.
     conn.execute('UPDATE discovered_jobs SET base_score=match_score, '
                  'personal_fit_score=match_score WHERE base_score=0 AND personal_fit_score=0')
+
+    # -- migration 011: manually imported LinkedIn job alerts ---------------
+    # Provenance is not the same thing as the canonical source: a job that the
+    # company's own board already delivered stays a Greenhouse job and keeps
+    # its application URL, it only records that a LinkedIn alert mentioned it
+    # too.  ``needs_details`` marks a job whose description is still missing,
+    # which is exactly what an alert entry gives you: a title, a company and a
+    # link, which is not enough for a trustworthy fit score.
+    _add_column(conn, 'discovered_jobs', 'discovered_via', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'linkedin_job_id', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'linkedin_url', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'needs_details', 'INTEGER NOT NULL DEFAULT 0')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_linkedin ON discovered_jobs(linkedin_job_id)')
 
     _seed_sources(conn)
     _seed_presets(conn)

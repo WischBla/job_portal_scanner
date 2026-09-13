@@ -50,6 +50,8 @@ match score, then by recency. Each card shows:
 
 No search box, no filters, no source configuration. All of that lives in Config.
 
+The second button, **Import LinkedIn Alert**, is described below.
+
 ### Applications
 
 A simple pipeline: Preparation, Applied, Screening, Interview, Final, Offer,
@@ -95,6 +97,55 @@ endpoint or honestly marked MANUAL.
 
 Everything above is public and unauthenticated. Nothing logs in, works around a
 CAPTCHA or an anti-bot check, or scrapes LinkedIn or jobs.ch.
+
+### Import LinkedIn Alert
+
+LinkedIn has no usable public job API and is never scraped, so the alert mails
+LinkedIn already sends are imported by hand:
+
+1. save the job-alert e-mail out of the mail client as `.txt` (or `.eml`)
+2. Jobs → **Import LinkedIn Alert** → choose the file, or paste the text
+3. **Preview** lists every job the alert contained, each marked NEW or
+   ALREADY KNOWN, with the reason for a match
+4. tick what should be imported and confirm
+
+There is no mailbox connection, no login, no browser extension and no automation
+of LinkedIn itself. The importer only ever reads a file that is already on the
+machine, and the parser is transport-agnostic (`text → LinkedInAlertParser →
+ParsedJob[]`), so a mail transport could feed it later without the parsing
+moving.
+
+**What is kept.** Title, company, location, the LinkedIn job id, the canonical
+job URL and the optional informational line. The mailed link
+
+    https://www.linkedin.com/comm/jobs/view/4428824971?savedSearchId=…&midToken=…
+
+is stored as
+
+    https://www.linkedin.com/jobs/view/4428824971
+
+Every tracking and authentication parameter (`savedSearchId`,
+`savedSearchAuthToken`, `trackingId`, `refId`, `lipi`, `midToken`, `midSig`,
+`trk`, `trkEmail`, `eid`, `otpToken`, …) is dropped, and so are the recipient
+address, the LinkedIn footer and the profile tagline. The source mail itself is
+never stored.
+
+**Deduplication.** An imported entry is checked against every stored job, in
+this order: the canonical external job id, the canonical application URL, the
+LinkedIn job id, then normalised company + title + location. A job the company's
+own board already delivered stays authoritative - it keeps its source, its
+application URL, its description and its score, and only records
+`discovered_via = linkedin`. No second card is ever created. A job a previous
+scan had retired comes back as SEEN, because the alert is evidence that the
+posting is open again.
+
+**NEEDS_DETAILS.** An alert carries a title, a company and a link - not a job
+description, and that is not enough for a trustworthy Personal Fit Score. A
+genuinely new entry is stored, scored and flagged **needs details**, with an
+**Add description** action. Nothing is invented. Once the real description is
+pasted, the job is re-scored by exactly the same pipeline every other job uses:
+base match score + Operating Style Adjustment + Career Direction Adjustment.
+There is no LinkedIn-specific scoring and no bonus or penalty for the channel.
 
 ### Why a company stays MANUAL
 
@@ -472,7 +523,7 @@ scorer so old and new cards read the same way.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 303 tests
+.venv/bin/python -m pytest tests -q      # 398 tests
 .venv/bin/python run.py --reload         # auto-reload
 ```
 
@@ -486,6 +537,8 @@ scorer so old and new cards read the same way.
 | `jobscanner/filters.py` | stage 1 hard rules |
 | `jobscanner/scoring.py` | stage 2 explainable 0-100 score |
 | `jobscanner/pipeline.py` | fetch → normalise → dedupe → filter → score → persist |
+| `jobscanner/linkedin_alert.py` | saved LinkedIn alert mail (.txt/.eml/text) → ParsedJob[] |
+| `jobscanner/alert_import.py` | alert preview, deduplication against stored jobs, import |
 | `jobscanner/compensation.py` | compensation estimator |
 | `jobscanner/ai/` | optional provider abstraction + cache + template fallback |
 | `jobscanner/fit.py` | Operating Style and Career Direction adjustments |

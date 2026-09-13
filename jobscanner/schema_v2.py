@@ -230,6 +230,34 @@ def _seed_settings(conn, now):
                      (key, json.dumps(value, ensure_ascii=False), now))
 
 
+def rescore_job(conn, job, profile, scorer=None):
+    """Re-score exactly one stored job in place and return the scorer result.
+
+    The single writer of the score columns, so the scan pipeline, a full
+    rescore and a job that only just received its description all go through
+    the same code.  Nothing but the score and its explanation is written.
+    """
+    import json as _json
+
+    from . import fit as _fit
+    from .scoring import MatchScorer
+
+    scorer = scorer or MatchScorer()
+    result = scorer.score(dict(job), profile)
+    columns = _fit.score_columns(result)
+    extra = ','.join('{0}=?'.format(c) for c in _fit.SCORE_COLUMNS)
+    conn.execute(
+        'UPDATE discovered_jobs SET match_score=?, match_label=?, match_reasons=?, '
+        'match_concerns=?, match_breakdown=?, matched_terms=?, {0} WHERE id=?'.format(extra),
+        [result['score'], _label(result['score']),
+         _json.dumps(result['reasons'], ensure_ascii=False),
+         _json.dumps(result['concerns'], ensure_ascii=False),
+         _json.dumps(result['breakdown'], ensure_ascii=False),
+         _json.dumps(result['terms'], ensure_ascii=False)]
+        + [columns[c] for c in _fit.SCORE_COLUMNS] + [job['id']])
+    return result
+
+
 def rescore_existing_jobs(conn, profile):
     """Re-run the current scorer over rows scored by an older version.
 
@@ -238,27 +266,12 @@ def rescore_existing_jobs(conn, profile):
     or its link to an application - and it means jobs that were already in the
     database show the same kind of card as freshly scanned ones.
     """
-    import json as _json
-
-    from . import fit as _fit
     from .scoring import MatchScorer
 
     scorer = MatchScorer()
-    extra = ','.join('{0}=?'.format(c) for c in _fit.SCORE_COLUMNS)
     rows = conn.execute('SELECT * FROM discovered_jobs').fetchall()
     for row in rows:
-        job = dict(row)
-        result = scorer.score(job, profile)
-        columns = _fit.score_columns(result)
-        conn.execute(
-            'UPDATE discovered_jobs SET match_score=?, match_label=?, match_reasons=?, '
-            'match_concerns=?, match_breakdown=?, matched_terms=?, {0} WHERE id=?'.format(extra),
-            [result['score'], _label(result['score']),
-             _json.dumps(result['reasons'], ensure_ascii=False),
-             _json.dumps(result['concerns'], ensure_ascii=False),
-             _json.dumps(result['breakdown'], ensure_ascii=False),
-             _json.dumps(result['terms'], ensure_ascii=False)]
-            + [columns[c] for c in _fit.SCORE_COLUMNS] + [job['id']])
+        rescore_job(conn, dict(row), profile, scorer)
     # Estimates are derived from the job, so drop the cache once.
     conn.execute('DELETE FROM compensation_estimates')
     return len(rows)

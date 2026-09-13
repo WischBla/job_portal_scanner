@@ -173,6 +173,15 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
             'adjustment': round(float(job.get('career_direction_adjustment') or 0.0), 1),
             'detail': job.get('career_direction_detail') or '',
         },
+        # Where the job was *found*, which is not necessarily where it lives:
+        # a LinkedIn alert can point at a job the company's own board already
+        # delivered, and that job keeps its source and its application URL.
+        'discovered_via': job.get('discovered_via') or '',
+        'linkedin_url': job.get('linkedin_url') or '',
+        # An imported alert entry has a title, a company and a link, and no
+        # description.  The card says so instead of presenting a fit score
+        # that was computed from four words.
+        'needs_details': bool(job.get('needs_details')),
         'feedback': job.get('feedback') or '',
         'feedback_reason': job.get('feedback_reason') or '',
         'reasons': reasons,
