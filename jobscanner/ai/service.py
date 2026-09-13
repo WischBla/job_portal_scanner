@@ -18,7 +18,7 @@ SYSTEM_PROMPT = (
     'applying for. Be concrete, sober and short. Never invent facts that are not in '
     'the candidate profile or the job description. Answer with a single JSON object '
     'and nothing else, using exactly these keys: fit_summary (string, max 60 words), '
-    'strongest_matches (array of at most 5 short strings), gaps (array of at most 4 '
+    'strongest_matches (array of at most 5 short strings), gaps (array of at most 3 '
     'short strings naming real gaps, empty if there are none), seniority_fit (string, '
     'one or two sentences), application_angle (string, how to position the application, '
     'max 60 words), salary_commentary (string, what compensation is realistic and why, '
@@ -40,6 +40,14 @@ def get_provider(settings=None):
         return None
     return cls(settings.get('ai_model') or '', key,
                timeout=int(settings.get('ai_timeout_seconds') or 60))
+
+
+def below_ai_threshold(job, settings):
+    """True when the deterministic score does not justify an AI call."""
+    minimum = int((settings or {}).get('ai_analyse_min_score') or 0)
+    if not minimum:
+        return False
+    return int(job.get('match_score') or 0) < minimum
 
 
 def _fingerprint(job, person, provider_name, model):
@@ -126,7 +134,7 @@ def template_analysis(job, person=None):
     return AIResult.coerce({
         'fit_summary': summary,
         'strongest_matches': reasons[:5],
-        'gaps': concerns[:4],
+        'gaps': concerns[:3],
         'seniority_fit': seniority_fit,
         'application_angle': angle,
         'salary_commentary': '',
@@ -181,6 +189,11 @@ def analyse_job(job, person, settings=None, conn=None, force=False, provider=Non
     conn = conn or connect()
     try:
         provider = provider if provider is not None else get_provider(settings)
+        # AI runs *after* deterministic filtering and scoring, on the jobs that
+        # earned it.  A weak match gets the same-shaped template analysis
+        # instead of an API call - the user can still force one explicitly.
+        if provider is not None and not force and below_ai_threshold(job, settings):
+            provider = None
         provider_name = getattr(provider, 'name', '') or 'template'
         model = getattr(provider, 'model', '') or ''
         mark = _fingerprint(job, person, provider_name, model)
@@ -196,6 +209,11 @@ def analyse_job(job, person, settings=None, conn=None, force=False, provider=Non
             result = dict(template_analysis(job, person))
             result['_source'] = 'template'
             result['_provider'] = ''
+            if settings.get('ai_enabled') and below_ai_threshold(job, settings):
+                result['_note'] = (
+                    'Deterministic analysis: the match score is below the AI threshold of '
+                    '{0}. Use "Re-analyse" to force an AI analysis anyway.'.format(
+                        settings.get('ai_analyse_min_score')))
             return result
 
         try:

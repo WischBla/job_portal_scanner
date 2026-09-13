@@ -154,14 +154,31 @@ class ApplicationsScreenTests(ApiTestCase):
 
 
 class ProfileScreenTests(ApiTestCase):
-    def test_the_profile_is_seeded_for_sebastian(self):
+    def test_a_fresh_profile_is_empty_and_carries_no_personal_data(self):
+        """A new installation must not arrive pre-filled with anyone's data."""
         person = self.client.get('/api/profile').json()['person']
-        self.assertEqual(person['first_name'], 'Sebastian')
-        self.assertEqual(person['last_name'], 'Bierwisch')
-        self.assertTrue(person['linkedin_url'])
-        self.assertTrue(person['work_authorization'])
-        self.assertEqual(person['comp_minimum_chf'], 235000)
-        self.assertTrue(person['target_roles'])
+        for key in ('first_name', 'last_name', 'email', 'phone', 'linkedin_url',
+                    'nationality', 'work_authorization'):
+            self.assertEqual(person[key], '', '{0} must start empty'.format(key))
+        for key in ('target_roles', 'secondary_target_roles', 'achievements',
+                    'strengths', 'career_history', 'languages'):
+            self.assertEqual(person[key], [], '{0} must start empty'.format(key))
+        self.assertEqual(person['comp_minimum_chf'], 0)
+
+    def test_the_profile_accepts_and_returns_every_field(self):
+        payload = {'first_name': 'Alex', 'email': 'alex@example.test',
+                   'travel_willingness': 'High for workshops, not permanent assignments',
+                   'strengths': ['Strategic'], 'achievements': ['Cut incident volume'],
+                   'secondary_target_roles': ['Head of Platform'],
+                   'comp_target_chf': 300000}
+        self.client.put('/api/profile', json=payload)
+        person = self.client.get('/api/profile').json()['person']
+        self.assertEqual(person['first_name'], 'Alex')
+        self.assertIn('workshops', person['travel_willingness'])
+        self.assertEqual(person['strengths'], ['Strategic'])
+        self.assertEqual(person['achievements'], ['Cut incident volume'])
+        self.assertEqual(person['secondary_target_roles'], ['Head of Platform'])
+        self.assertEqual(person['comp_target_chf'], 300000)
 
     def test_the_profile_survives_a_restart(self):
         self.client.put('/api/profile', json={'phone': '+41 79 123 45 67',

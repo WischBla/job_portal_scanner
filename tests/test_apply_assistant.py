@@ -68,18 +68,31 @@ class FieldClassificationTests(unittest.TestCase):
         self.assertEqual(adapters.LeverAdapter().classify('Name')[0], 'full_name')
 
 
+#: A stand-in applicant.  The real profile lives only in the local database,
+#: so the tests carry their own fixture rather than leaning on the seed.
+FIXTURE_PERSON = dict(DEFAULT_PERSON, **{
+    'first_name': 'Alex',
+    'last_name': 'Beispiel',
+    'email': 'alex@example.test',
+    'phone': '+41 79 000 00 00',
+    'linkedin_url': 'https://www.linkedin.com/in/alex-beispiel',
+    'nationality': 'German',
+    'work_authorization': 'EU/EFTA citizen; no sponsorship required.',
+    'notice_period': 'a notice period',
+})
+
+
 class ReportTests(unittest.TestCase):
     def setUp(self):
-        self.person = dict(DEFAULT_PERSON)
-        self.person['phone'] = '+41 79 000 00 00'
+        self.person = dict(FIXTURE_PERSON)
 
     def test_objective_fields_are_filled_from_the_profile(self):
         controls = [control(0, 'First Name'), control(1, 'Last Name'),
                     control(2, 'Email', 'email'), control(3, 'LinkedIn')]
         report = assistant.build_report(controls, self.person, adapters.GENERIC)
         filled = {item['field']: item['value'] for item in report['filled']}
-        self.assertEqual(filled['first_name'], 'Sebastian')
-        self.assertEqual(filled['last_name'], 'Bierwisch')
+        self.assertEqual(filled['first_name'], 'Alex')
+        self.assertEqual(filled['last_name'], 'Beispiel')
         self.assertEqual(filled['email'], self.person['email'])
         self.assertIn('linkedin.com', filled['linkedin_url'])
 
@@ -126,7 +139,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_reports_always_say_that_nothing_was_submitted(self):
         controls = [control(0, 'First Name')]
-        report = assistant.build_report(controls, dict(DEFAULT_PERSON), adapters.GENERIC)
+        report = assistant.build_report(controls, dict(FIXTURE_PERSON), adapters.GENERIC)
         self.assertNotIn('submitted', report)  # build_report never submits anything
 
 

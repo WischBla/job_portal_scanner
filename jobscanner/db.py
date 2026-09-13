@@ -25,7 +25,13 @@ LEGACY_DB_PATH = DATA_DIR / 'applications.db'
 # Overridable for tests via set_db_path() or the JOB_TRACKER_DB env variable.
 _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 
-SCHEMA_VERSION = 7
+#: Root of the portable workspace: ``data/`` and ``documents/`` live under it.
+#: Everything the user owns is addressed *relative* to this directory and never
+#: by an absolute path, so the whole workspace can be archived on one machine
+#: and unpacked into a different checkout on another.
+_WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
+
+SCHEMA_VERSION = 9
 
 
 def set_db_path(path):
@@ -36,6 +42,21 @@ def set_db_path(path):
 
 def get_db_path():
     return _DB_PATH
+
+
+def set_workspace_root(path):
+    """Point ``documents/`` and every relative document path at another root.
+
+    Used by the workspace import/export round trip and by the tests that prove
+    a workspace really is machine independent.
+    """
+    global _WORKSPACE_ROOT
+    _WORKSPACE_ROOT = Path(path).resolve()
+    return _WORKSPACE_ROOT
+
+
+def workspace_root():
+    return _WORKSPACE_ROOT
 
 
 def now_iso():
@@ -457,6 +478,22 @@ def migrate(conn):
     _add_column(conn, 'search_profile', 'sort_mode', "TEXT NOT NULL DEFAULT 'score'")
     _add_column(conn, 'search_profile', 'preset_key', "TEXT NOT NULL DEFAULT ''")
 
+    # -- migration 008: down-ranking and commute preferences ----------------
+    # Low-relevance domains are a *ranking* signal, not a gate: they cost
+    # points and say so, instead of silently removing a posting that happens
+    # to mention the wrong word.
+    _add_column(conn, 'search_profile', 'deprioritized_keywords', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'search_profile', 'preferred_radius_km', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'search_profile', 'max_commute_minutes', 'INTEGER NOT NULL DEFAULT 0')
+
+    # -- migration 008: personal YES / MAYBE / NO feedback -------------------
+    # Recorded for later calibration only.  Nothing here feeds back into the
+    # scorer; a verdict is data about the user, not a new filter rule.
+    _add_column(conn, 'discovered_jobs', 'feedback', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_reason', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_note', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'feedback_at', "TEXT NOT NULL DEFAULT ''")
+
     # -- company_watchlist / job_sources: source resolution + health --------
     for column, ddl in SOURCE_HEALTH_COLUMNS:
         _add_column(conn, 'company_watchlist', column, ddl)
@@ -478,6 +515,17 @@ def migrate(conn):
     _merge_duplicate_sources(conn)
     _seed_profile(conn)
     schema_v2.migrate_v2(conn, now_iso(), profile=load_profile(conn))
+
+    # -- migration 009: the parts of the person that had nowhere to live ----
+    # Career achievements, CliftonStrengths and travel willingness are private
+    # matching / interview context.  They are stored, never auto-inserted into
+    # a generated document.
+    _add_column(conn, 'person_profile', 'secondary_target_roles', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'person_profile', 'travel_willingness', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'person_profile', 'strengths', "TEXT NOT NULL DEFAULT '[]'")
+    _add_column(conn, 'person_profile', 'achievements', "TEXT NOT NULL DEFAULT '[]'")
+
+    _portabilise_document_paths(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
@@ -628,6 +676,44 @@ def _merge_duplicate_sources(conn):
     watchlist = CompanyWatchlist(conn)
     for watch_id in merged:
         watchlist.update(watch_id, {})
+
+
+def _portabilise_document_paths(conn):
+    """Rewrite any absolute document path as a workspace-relative one.
+
+    Older rows (and anything written before the workspace became portable)
+    could hold ``/Users/<someone>/.../documents/cv/x.pdf``.  That path is
+    meaningless on another machine, so it is reduced to ``documents/cv/x.pdf``
+    here.  The conversion is additive and conservative: a row is only rewritten
+    when a ``documents/`` segment can actually be found in it, and the file on
+    disk is never touched.
+    """
+    if not _table_exists(conn, 'documents'):
+        return 0
+    changed = 0
+    for row in conn.execute('SELECT id, path FROM documents').fetchall():
+        portable = portable_document_path(row['path'])
+        if portable and portable != str(row['path'] or ''):
+            conn.execute('UPDATE documents SET path=? WHERE id=?', (portable, row['id']))
+            changed += 1
+    return changed
+
+
+def portable_document_path(path):
+    """``<anything>/documents/cv/x.pdf`` -> ``documents/cv/x.pdf``.
+
+    Returns '' when the value carries no ``documents/`` segment at all, which
+    means it cannot be made portable and is better left exactly as it is.
+    """
+    text = str(path or '').strip().replace('\\', '/')
+    if not text:
+        return ''
+    if text.startswith('documents/'):
+        return text
+    parts = text.split('/')
+    if 'documents' in parts:
+        return '/'.join(parts[parts.index('documents'):])
+    return ''
 
 
 def load_presets(conn):

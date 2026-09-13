@@ -42,7 +42,11 @@ CREATE TABLE IF NOT EXISTS person_profile (
     technical_skills TEXT NOT NULL DEFAULT '[]',
     leadership_profile TEXT NOT NULL DEFAULT '',
     target_roles TEXT NOT NULL DEFAULT '[]',
+    secondary_target_roles TEXT NOT NULL DEFAULT '[]',
     target_geography TEXT NOT NULL DEFAULT '[]',
+    travel_willingness TEXT NOT NULL DEFAULT '',
+    strengths TEXT NOT NULL DEFAULT '[]',
+    achievements TEXT NOT NULL DEFAULT '[]',
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
@@ -257,9 +261,9 @@ def rescore_existing_jobs(conn, profile):
 
 
 def _label(score):
-    if score >= 80:
-        return 'Excellent'
-    return 'Strong' if score >= 70 else 'Review'
+    """The same five bands the scorer and the Jobs screen use."""
+    from .jobs_service import classify
+    return classify(score)
 
 
 def migrate_v2(conn, now, profile=None):
@@ -288,10 +292,9 @@ def migrate_v2(conn, now, profile=None):
         conn.execute("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('v2_rescored', ?)",
                      (now,))
     else:
-        conn.execute("UPDATE discovered_jobs SET match_label='Excellent' WHERE match_score >= 80")
-        conn.execute("UPDATE discovered_jobs SET match_label='Strong' "
-                     'WHERE match_score >= 70 AND match_score < 80')
-        conn.execute("UPDATE discovered_jobs SET match_label='Review' WHERE match_score < 70")
+        for row in conn.execute('SELECT id, match_score FROM discovered_jobs').fetchall():
+            conn.execute('UPDATE discovered_jobs SET match_label=? WHERE id=?',
+                         (_label(row[1] or 0), row[0]))
 
 
 def canonical_status(value):

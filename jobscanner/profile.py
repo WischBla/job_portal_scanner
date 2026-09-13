@@ -73,6 +73,11 @@ DEFAULT_ALLOWED_LOCATIONS = ['Zurich', 'Zug', 'Luzern', 'Bern', 'Basel']
 DEFAULT_OPTIONAL_LOCATIONS = ['St. Gallen', 'Schwyz', 'Aargau', 'Lugano']
 DEFAULT_TERTIARY_LOCATIONS = []
 
+#: Domains that belong to a different career.  They cost points and are named
+#: as a concern - they never remove a posting, because the same word can appear
+#: in a genuinely technical role ("GTM Engineering Lead" is not "GTM Lead").
+DEFAULT_DEPRIORITIZED_KEYWORDS = []
+
 # Titles that are not the primary target but must never be thrown away for
 # "wrong seniority" - scope and responsibility decide, not the noun.
 DEFAULT_SECONDARY_TITLES = []
@@ -106,16 +111,21 @@ DEFAULT_PROFILE = {
     'salary_floor_chf': 0,
     'sort_mode': 'score',
     'preset_key': '',
+    # -- added with the personal Swiss profile ---------------------------
+    'deprioritized_keywords': list(DEFAULT_DEPRIORITIZED_KEYWORDS),
+    'preferred_radius_km': 0,
+    'max_commute_minutes': 0,
 }
 
 _LIST_FIELDS = ['allowed_countries', 'allowed_locations', 'optional_locations',
                 'tertiary_locations', 'seniority_levels', 'secondary_titles',
                 'include_titles', 'exclude_titles',
                 'required_keywords', 'preferred_keywords', 'excluded_keywords',
-                'language_preferences', 'sources_enabled']
+                'deprioritized_keywords', 'language_preferences', 'sources_enabled']
 _JSON_FIELDS = _LIST_FIELDS + ['remote_policy']
 _INT_FIELDS = ['hybrid_max_office_days', 'minimum_match_score', 'minimum_salary_chf',
-               'salary_target_chf', 'salary_floor_chf', 'auto_hours']
+               'salary_target_chf', 'salary_floor_chf', 'auto_hours',
+               'preferred_radius_km', 'max_commute_minutes']
 _BOOL_FIELDS = ['allow_missing_salary']
 _STR_FIELDS = ['country_mode', 'location_filter_mode', 'salary_mode', 'sort_mode', 'preset_key']
 
@@ -203,6 +213,13 @@ def sanitize(payload):
     out['salary_floor_chf'] = _as_int(data.get('salary_floor_chf'),
                                       DEFAULT_PROFILE['salary_floor_chf'], 0, 10_000_000)
     out['auto_hours'] = _as_int(data.get('auto_hours'), DEFAULT_PROFILE['auto_hours'], 0, 168)
+    # Radius and commute are preferences the UI shows and the user reasons
+    # with; no filter reads them, so a Swiss job outside the radius is never
+    # rejected for being outside it.
+    out['preferred_radius_km'] = _as_int(data.get('preferred_radius_km'),
+                                         DEFAULT_PROFILE['preferred_radius_km'], 0, 2000)
+    out['max_commute_minutes'] = _as_int(data.get('max_commute_minutes'),
+                                         DEFAULT_PROFILE['max_commute_minutes'], 0, 600)
     out['allow_missing_salary'] = bool(data.get('allow_missing_salary', DEFAULT_PROFILE['allow_missing_salary']))
 
     if not out['seniority_levels']:

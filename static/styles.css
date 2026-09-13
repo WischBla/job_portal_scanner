@@ -86,6 +86,7 @@ button.small { padding: 3px 8px; font-size: 13px; }
 .score.excellent .value { color: var(--accent); }
 .score.excellent .class { color: var(--accent); }
 .score.strong .value { color: var(--text); }
+.score.weak .value, .score.below-threshold .value { color: var(--text-faint); }
 
 .card-title { flex: 1; min-width: 0; }
 .card-title h3 { font-size: 16px; font-weight: 600; margin: 0 0 2px; }
@@ -211,3 +212,16 @@ code { font-family: var(--mono); font-size: 12px; background: #f5f6f8; padding: 
 .scan-summary td { border: 0; padding: 1px 0; font-size: 13px; }
 .scan-summary td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .scan-failure { margin-top: 8px; font-size: 12px; color: #9a2c2c; }
+
+/* Personal verdict: one row on the card, deliberately unobtrusive. It records
+   a decision for later calibration - it never changes scoring or hides a job. */
+.verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 0 0; border-top: 1px solid var(--line); font-size: 13px; }
+.verdict-label { color: var(--text-faint); font-size: 12px; }
+.verdict-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.verdict select { font-size: 12px; padding: 3px 6px; }
+
+/* Config: category and transfer tables reuse the plain table styling. */
+.status-ok { color: var(--good, #2e7d32); }
+.status-missing { color: var(--text-faint); }
+.status-broken { color: var(--bad, #9a2c2c); }

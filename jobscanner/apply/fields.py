@@ -68,6 +68,16 @@ REVIEW_PATTERNS = [
      'Voluntary demographic question'),
     (r'\bhow did you hear\b|\breferral\b|\bwie sind sie auf uns\b', 'Source / referral question'),
     (r'\bnotice\b.*\bexplain\b', 'Open question'),
+    # Questions this profile is asked constantly. They are named explicitly so
+    # the answer is always "review required" with a useful label, never a
+    # lucky fall-through to "unrecognised field".
+    (r'\bwhy switzerland\b|\bwarum die schweiz\b|\bwhy (do you want to )?(move|relocate) to\b',
+     'Relocation motivation question'),
+    (r'\bwhy are you leaving\b|\breason for leaving\b|\bwhy leave\b|\bwechselmotivation\b',
+     'Reason-for-leaving question'),
+    (r'\bdifficult situation\b|\bchallenging situation\b|\bconflict\b|\bschwierige situation\b',
+     'Behavioural question'),
+    (r'\bleadership philosophy\b|\bf.hrungsphilosophie\b', 'Leadership question'),
 ]
 
 #: Field keys whose value comes from a derived answer rather than a raw column.

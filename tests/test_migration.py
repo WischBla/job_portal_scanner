@@ -93,7 +93,10 @@ class MigrationTests(unittest.TestCase):
         with jsdb.connect() as conn:
             job = dict(conn.execute('SELECT * FROM discovered_jobs').fetchone())
             self.assertEqual(job['state'], 'SAVED')
-            self.assertIn(job['match_label'], ('Excellent', 'Strong', 'Review'))
+            # The label must be one of the current five bands - a V1 German
+            # label surviving here would mean the rescore never ran.
+            self.assertIn(job['match_label'],
+                          ('Excellent', 'Strong', 'Review', 'Weak', 'Below threshold'))
 
     def test_jobs_scored_by_v1_are_re_explained_in_the_current_vocabulary(self):
         with jsdb.connect() as conn:
@@ -120,8 +123,12 @@ class MigrationTests(unittest.TestCase):
                           'compensation_estimates', 'salary_benchmarks', 'apply_sessions',
                           'application_documents'):
                 self.assertIn(table, tables)
-            self.assertEqual(conn.execute(
-                'SELECT first_name FROM person_profile WHERE id=1').fetchone()[0], 'Sebastian')
+            # The row is created, and it is blank: no personal value is
+            # seeded from source into a fresh or migrated database.
+            person = dict(conn.execute('SELECT * FROM person_profile WHERE id=1').fetchone())
+            self.assertEqual(person['id'], 1)
+            self.assertEqual(person['first_name'], '')
+            self.assertEqual(person['email'], '')
             self.assertGreater(
                 conn.execute('SELECT COUNT(*) FROM salary_benchmarks').fetchone()[0], 0)
 

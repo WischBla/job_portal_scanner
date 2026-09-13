@@ -164,23 +164,64 @@ keywords are not rewarded - each term counts once.
 A missing salary or an unstated office-day policy produces a **concern**, never a
 rejection.
 
-### The built-in search profile
+**Down-ranking.** A configurable list of low-relevance domains (go-to-market,
+pure sales, marketing, helpdesk, desktop support, pure SAP or data-analyst
+roles) costs points and is named as a concern, instead of removing the posting.
+A title that names both the domain *and* a target responsibility area keeps most
+of its points, so "GTM Engineering Lead" stays visible while "GTM Lead" sinks to
+the bottom of the list. An execution-level title (specialist, coordinator,
+administrator, support engineer) costs points only when nothing in the posting
+describes a leadership, program or transformation mandate.
 
-Because there is one user, the criteria ship with the application:
+**How to read a score:**
 
-* **Geography** Switzerland only (strict). Zurich, Zug, Lucerne, Bern, Basel
-  preferred; St. Gallen, Schwyz, Aargau secondary; Lugano also considered. Other
-  Swiss cities still appear - they simply rank lower.
-* **Work model** Remote and hybrid preferred, max ~2 office days. Unknown office
-  policy is a concern, not a rejection.
-* **Seniority** Head of, Director, Senior Director, Principal, Global Lead,
-  Technology / Engineering / Operations / Transformation Lead, Senior Engineering
-  Manager, Principal and Senior TPM.
-* **Domains** Technology / Technical / Engineering Operations, Platform
-  Engineering, SRE, Reliability, Cloud, Infrastructure, DevOps, DevSecOps,
-  Technology and Engineering Transformation, Technical Program / Project
-  Management, Engineering Productivity, Developer Experience, AI Operations,
-  AIOps, AI Engineering, Automation, Technology Strategy.
+| Score | Meaning |
+|---|---|
+| 80-100 | Excellent / high priority |
+| 70-79 | Strong match |
+| 60-69 | Worth reviewing |
+| 50-59 | Weak / edge match |
+| below 50 | Normally hidden from the Jobs list - still stored and still explained |
+
+Company priority is only ever a tie-breaker. The ordering is match score first,
+then priority, then posting date, so a priority-A job that scored 64 can never
+appear above a priority-B job that scored 82.
+
+### The search profile
+
+The criteria are **configuration, not code**. They live in one row of
+`search_profile` in the local database and are edited under Config; the scanner
+reads that same row, so "saved" and "used by the scanner" cannot drift apart.
+A built-in preset is offered as a starting point and is never applied
+implicitly.
+
+What the profile controls:
+
+* **Geography** Switzerland is the only hard gate (strict mode). Inside
+  Switzerland the preferred-location lists *rank* rather than exclude, in three
+  tiers, so a Swiss city that is on no list still appears - it simply scores
+  lower. A preferred radius and commute time are stored as preferences and are
+  read by no filter.
+* **Work model** Remote, hybrid and onsite each acceptable or not, with a
+  maximum number of office days. An **unknown** work model is never rejected.
+* **Seniority** The preferred levels, plus an "also accepted" list of titles
+  that can never be rejected for the wrong seniority - scope decides the rest.
+* **Domains** A vocabulary of target responsibility areas and technology
+  keywords, plus the down-ranked domains described above.
+* **Compensation** An interesting-from figure, a target and a
+  published-and-clearly-below floor. In the recommended `ranking` mode none of
+  them ever removes a posting.
+
+### Personal feedback
+
+Each job card carries a **YES / MAYBE / NO** verdict, with an optional reason on
+a "no" (too operational, too junior, too commercial, too much consulting, wrong
+location, insufficient technical responsibility, insufficient leadership scope,
+compensation concern, other).
+
+A verdict is **recorded and nothing else**: it does not retrain the scorer,
+change a filter or hide the job. It is there for a later, explicit calibration
+step.
 
 ---
 
@@ -218,8 +259,14 @@ labelled.
 
 With a provider configured, the full job description and the profile are analysed
 and the result is stored per job, so reopening the Jobs page never issues a new
-request. It returns: fit summary, strongest matches, real gaps, seniority fit,
-recommended application angle, and salary commentary.
+request. It returns: fit summary, strongest matches (at most 5), real gaps (at
+most 3), seniority fit, recommended application angle, and salary commentary.
+
+AI never analyses everything a scan fetched. It runs **after** deterministic
+filtering and scoring, one job at a time, when you open a job's analysis - and
+only for jobs that reached the AI threshold in Config (default 70). Anything
+below that gets the identically shaped template analysis instead, and says so;
+"Re-analyse" forces a real call when you want one anyway.
 
 ```bash
 export ANTHROPIC_API_KEY=...     # or OPENAI_API_KEY
@@ -275,7 +322,66 @@ documents/certificates/
 ```
 
 `data/` and `documents/` are git-ignored. Personal documents and the database are
-never committed.
+never committed, and no personal value is hard-coded anywhere in the source: a
+fresh installation starts with a blank profile.
+
+### Portable workspace
+
+`data/app.db` plus `documents/` **is** the workspace, and it moves between
+machines as one archive. Document paths are stored relative to the workspace
+root (`documents/cv/x.pdf`) and resolved at runtime, so a database written on
+one machine works unchanged in a different checkout under a different user
+account. An absolute path left by an older version is converted by the normal
+additive migration.
+
+Under **Config -> Backup & Transfer**, or from the command line:
+
+```bash
+python3 run.py export-workspace ~/Desktop/job-assistant-backup.zip
+python3 run.py inspect-workspace ~/Desktop/job-assistant-backup.zip
+python3 run.py import-workspace ~/Desktop/job-assistant-backup.zip
+
+# the same thing, when the launcher cannot start:
+python3 tools/workspace.py export ~/Desktop/job-assistant-backup.zip
+python3 tools/workspace.py import ~/Desktop/job-assistant-backup.zip
+```
+
+The archive contains exactly:
+
+```
+manifest.json          format version, schema version, timestamp, git revision,
+                       document list, SHA-256 checksums, row counts
+data/app.db
+documents/cv/ motivation/ references/ certificates/ other/
+```
+
+It **never** contains `.env`, API keys or tokens, browser profiles or cookies,
+caches, the virtual environment or `.git/` - the export collects the two
+workspace paths by name rather than sweeping the project folder, so a secret
+cannot be picked up by accident. API credentials are configured separately on
+the destination machine.
+
+> The export contains your personal profile, application history and documents.
+> Store and transfer it securely.
+
+**Import is safe.** The archive is validated first (zip, manifest, format
+version, SQLite integrity, required tables, member paths), the current database
+and documents are copied to `data/backups/` second, and only then is anything
+replaced. An older workspace is migrated before it is installed; a workspace
+from a *newer* application is refused with a clear message rather than
+downgraded. If anything fails, the previous workspace is restored - a failed
+import never leaves a half-written installation.
+
+### Moving to another computer
+
+1. Clone the repository and check out the branch you use.
+2. `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+3. `.venv/bin/python -m playwright install chromium`
+4. Start the application once, so the database and folders exist.
+5. `python3 run.py import-workspace <archive>` (or Config -> Backup & Transfer).
+6. Optionally create `.env` and set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+7. Start the application. Profile, search settings, jobs, applications,
+   watchlist and documents are all exactly as they were - nothing is re-typed.
 
 ### Migration from the previous version
 
@@ -295,7 +401,7 @@ scorer so old and new cards read the same way.
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 237 tests
+.venv/bin/python -m pytest tests -q      # 303 tests
 .venv/bin/python run.py --reload         # auto-reload
 ```
 

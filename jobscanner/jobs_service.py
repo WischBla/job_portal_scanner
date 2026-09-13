@@ -18,6 +18,23 @@ MAX_CONCERNS = 3
 
 EXCELLENT_FROM = 80
 STRONG_FROM = 70
+REVIEW_FROM = 60
+WEAK_FROM = 50
+
+#: Company priority breaks ties and nothing else.  A priority-A job that scored
+#: 64 must never appear above a priority-B job that scored 82, so the score is
+#: always the first term of the ordering and the posting date the last.
+PRIORITY_ORDER = "CASE w.priority WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'C' THEN 2 ELSE 3 END"
+
+#: Personal verdict on a job.  Recorded for later calibration only - nothing
+#: in the scorer or the filters reads it, so a "NO" never silently changes how
+#: the next scan behaves.
+FEEDBACK_VALUES = ('', 'YES', 'MAYBE', 'NO')
+FEEDBACK_REASONS = [
+    'Too operational', 'Too junior', 'Too commercial', 'Too much consulting',
+    'Wrong location', 'Insufficient technical responsibility',
+    'Insufficient leadership scope', 'Compensation concern', 'Other',
+]
 
 #: States the Jobs screen understands.
 OPEN_STATES = ('NEW', 'SEEN', 'SAVED', 'APPLIED')
@@ -27,12 +44,25 @@ HIDDEN_STATES = ('IGNORED', 'EXPIRED')
 
 
 def classify(score):
+    """The band label.  Fixed thresholds, so "Excellent" always means 80+."""
     score = int(score or 0)
     if score >= EXCELLENT_FROM:
         return 'Excellent'
     if score >= STRONG_FROM:
         return 'Strong'
-    return 'Review'
+    if score >= REVIEW_FROM:
+        return 'Review'
+    return 'Weak' if score >= WEAK_FROM else 'Below threshold'
+
+
+#: Band -> the sentence the Jobs screen shows next to the score.
+BAND_LABELS = {
+    'Excellent': 'Excellent / high priority',
+    'Strong': 'Strong match',
+    'Review': 'Worth reviewing',
+    'Weak': 'Weak / edge match',
+    'Below threshold': 'Below the display threshold',
+}
 
 
 def posting_age(published_at, first_seen):
@@ -115,6 +145,9 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
         'url': job.get('job_url') or '',
         'score': score,
         'classification': classify(score),
+        'band': BAND_LABELS.get(classify(score), ''),
+        'feedback': job.get('feedback') or '',
+        'feedback_reason': job.get('feedback_reason') or '',
         'reasons': reasons,
         'concerns': concerns,
         'age': posting_age(job.get('published_at'), job.get('first_seen')),
@@ -141,15 +174,19 @@ def list_cards(conn=None, state='', limit=200, include_ignored=False):
     conn = conn or connect()
     try:
         settings = load_settings(conn)
-        sql = 'SELECT * FROM discovered_jobs'
+        sql = ('SELECT j.* FROM discovered_jobs j '
+               'LEFT JOIN company_watchlist w ON w.company_name = j.company COLLATE NOCASE')
         params = []
         if state:
-            sql += ' WHERE state=?'
+            sql += ' WHERE j.state=?'
             params.append(state)
         elif not include_ignored:
-            sql += " WHERE state NOT IN ('IGNORED', 'EXPIRED')"
-        # Contract of the Jobs screen: score first, newest second.
-        sql += ' ORDER BY match_score DESC, COALESCE(NULLIF(published_at, \'\'), first_seen) DESC LIMIT ?'
+            sql += " WHERE j.state NOT IN ('IGNORED', 'EXPIRED')"
+        # Contract of the Jobs screen: score first, company priority only as a
+        # tie-breaker, newest last.
+        sql += (' ORDER BY j.match_score DESC, {0}, '
+                "COALESCE(NULLIF(j.published_at, ''), j.first_seen) DESC LIMIT ?").format(
+                    PRIORITY_ORDER)
         params.append(int(limit))
         rows = conn.execute(sql, params).fetchall()
         return [to_card(row_to_dict(r), conn, settings) for r in rows]
@@ -190,6 +227,60 @@ def counts(conn=None):
                           "AND match_score<? AND state NOT IN ('IGNORED', 'EXPIRED')",
                           STRONG_FROM, EXCELLENT_FROM),
         }
+    finally:
+        if owns:
+            conn.close()
+
+
+def set_feedback(job_id, verdict, reason='', note='', conn=None):
+    """Record a personal YES / MAYBE / NO verdict on one job.
+
+    Stored and nothing more: no rule is rewritten, no weight is retrained and
+    no job is removed.  The data is there for a later, explicit calibration
+    step that the user asks for.
+    """
+    from .db import now_iso
+
+    verdict = str(verdict or '').strip().upper()
+    if verdict not in FEEDBACK_VALUES:
+        raise ValueError('Feedback must be one of YES, MAYBE, NO (or empty to clear).')
+    reason = str(reason or '').strip()
+    if reason and reason not in FEEDBACK_REASONS:
+        raise ValueError('Unknown feedback reason: {0}'.format(reason))
+    if verdict != 'NO':
+        reason = ''       # a reason only ever qualifies a "NO"
+
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        row = conn.execute('SELECT id FROM discovered_jobs WHERE id=?', (job_id,)).fetchone()
+        if row is None:
+            return None
+        conn.execute('UPDATE discovered_jobs SET feedback=?, feedback_reason=?, '
+                     'feedback_note=?, feedback_at=? WHERE id=?',
+                     (verdict, reason, str(note or '')[:500],
+                      now_iso() if verdict else '', job_id))
+        conn.commit()
+        return get_card(job_id, conn, with_ai=False)
+    finally:
+        if owns:
+            conn.close()
+
+
+def feedback_summary(conn=None):
+    """Counts per verdict and per "NO" reason, for the Config screen."""
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        verdicts = {v: 0 for v in ('YES', 'MAYBE', 'NO')}
+        for row in conn.execute("SELECT feedback, COUNT(*) FROM discovered_jobs "
+                                "WHERE feedback <> '' GROUP BY feedback").fetchall():
+            verdicts[row[0]] = row[1]
+        reasons = {row[0]: row[1] for row in conn.execute(
+            "SELECT feedback_reason, COUNT(*) FROM discovered_jobs "
+            "WHERE feedback='NO' AND feedback_reason <> '' GROUP BY feedback_reason").fetchall()}
+        return {'verdicts': verdicts, 'reasons': reasons,
+                'total': sum(verdicts.values())}
     finally:
         if owns:
             conn.close()

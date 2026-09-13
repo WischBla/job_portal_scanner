@@ -26,6 +26,14 @@ class AnalysePayload(BaseModel):
     force: bool = False
 
 
+class FeedbackPayload(BaseModel, extra='ignore'):
+    """A personal verdict. Stored for later calibration; it changes no rule."""
+
+    verdict: str = ''
+    reason: str = ''
+    note: str = ''
+
+
 def _person(conn):
     row = conn.execute('SELECT * FROM person_profile WHERE id=1').fetchone()
     return from_row(row_to_dict(row)) if row else {}
@@ -65,6 +73,28 @@ def set_state(job_id: int, payload: StatePayload):
                      (state, now_iso(), job_id))
         conn.commit()
         return jobs_service.get_card(job_id, conn, with_ai=False)
+
+
+@router.get('/jobs/feedback/options')
+def feedback_options():
+    """What the Jobs screen may offer, and what has been recorded so far."""
+    with connect() as conn:
+        return {'verdicts': [v for v in jobs_service.FEEDBACK_VALUES if v],
+                'reasons': jobs_service.FEEDBACK_REASONS,
+                'summary': jobs_service.feedback_summary(conn)}
+
+
+@router.post('/jobs/{job_id}/feedback')
+def set_feedback(job_id: int, payload: FeedbackPayload):
+    with connect() as conn:
+        try:
+            card = jobs_service.set_feedback(job_id, payload.verdict, payload.reason,
+                                             payload.note, conn=conn)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if card is None:
+            raise HTTPException(404, 'Job not found')
+        return card
 
 
 @router.post('/jobs/{job_id}/analyse')

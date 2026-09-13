@@ -2,6 +2,11 @@
 
 No blob ever reaches the database.  ``documents/`` is git-ignored so a CV or a
 reference letter cannot be committed by accident.
+
+Paths are stored **relative to the workspace root** (``documents/cv/x.pdf``)
+and resolved at runtime.  That is what makes the workspace portable: the same
+database works after the folder is moved to another machine, another user
+account or another checkout.
 """
 
 import re
@@ -9,9 +14,22 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-from .db import BASE_DIR, connect, now_iso, row_to_dict
+from .db import connect, now_iso, portable_document_path, row_to_dict, workspace_root
 
-DOCUMENTS_DIR = BASE_DIR / 'documents'
+
+def documents_dir():
+    """``documents/`` under whatever workspace root is currently active."""
+    return workspace_root() / 'documents'
+
+
+def resolve(path):
+    """A stored (relative) document path -> the absolute file on this machine."""
+    text = str(path or '').strip()
+    if not text:
+        return workspace_root()
+    candidate = Path(text)
+    return candidate if candidate.is_absolute() else workspace_root() / candidate
+
 
 #: kind -> (subdirectory, human label, language)
 KINDS = {
@@ -37,8 +55,8 @@ class DocumentError(ValueError):
 
 def ensure_dirs():
     for subdir, _, _ in KINDS.values():
-        (DOCUMENTS_DIR / subdir).mkdir(parents=True, exist_ok=True)
-    return DOCUMENTS_DIR
+        (documents_dir() / subdir).mkdir(parents=True, exist_ok=True)
+    return documents_dir()
 
 
 def safe_filename(name):
@@ -62,7 +80,7 @@ def store(kind, filename, data, label='', notes='', conn=None):
 
     subdir, default_label, language = KINDS[kind]
     ensure_dirs()
-    target_dir = DOCUMENTS_DIR / subdir
+    target_dir = documents_dir() / subdir
     target = target_dir / '{0}__{1}'.format(kind, name)
     counter = 1
     while target.exists():
@@ -81,13 +99,21 @@ def store(kind, filename, data, label='', notes='', conn=None):
                                       size_bytes, is_primary, notes, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (kind, label or default_label, language, target.name,
-             str(target.relative_to(BASE_DIR)), _mime_for(suffix), len(data),
+             _relative_path(target), _mime_for(suffix), len(data),
              1 if kind in SINGLE_KINDS else 0, notes, ts, ts))
         conn.commit()
         return get(cursor.lastrowid, conn)
     finally:
         if owns:
             conn.close()
+
+
+def _relative_path(target):
+    """Store ``documents/cv/x.pdf``, never an absolute machine-specific path."""
+    try:
+        return str(target.relative_to(workspace_root()))
+    except ValueError:
+        return portable_document_path(target) or str(target)
 
 
 def _mime_for(suffix):
@@ -104,7 +130,7 @@ def _mime_for(suffix):
 def _decorate(data):
     if not data:
         return None
-    path = BASE_DIR / data['path']
+    path = resolve(data['path'])
     data['exists'] = path.exists()
     data['absolute_path'] = str(path)
     data['kind_label'] = KINDS.get(data['kind'], ('', data['kind'], ''))[1]
@@ -183,11 +209,56 @@ def delete(document_id, remove_file=True, conn=None):
         if remove_file:
             path = Path(document['absolute_path'])
             if path.exists():
-                trash = DOCUMENTS_DIR / '_removed'
+                trash = documents_dir() / '_removed'
                 trash.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(path), str(trash / '{0}-{1}'.format(
                     now_iso().replace(':', ''), path.name)))
         return True
+    finally:
+        if owns:
+            conn.close()
+
+
+#: The categories the Config / Profile screen always lists, in display order.
+#: A category with no file is reported as "Not configured" - it is never
+#: invented, and no placeholder file is ever written to disk.
+CATEGORY_ORDER = ('cv_de', 'cv_en', 'motivation_de', 'motivation_en',
+                  'reference', 'certificate', 'other')
+
+
+def categories(conn=None):
+    """Every document category with its current status.
+
+    ``configured`` means a metadata row exists *and* the file is really on
+    disk; a row whose file has gone missing is reported as ``Missing file`` so
+    a broken document is never silently treated as available.
+    """
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        stored = list_documents(conn)
+        out = []
+        for kind in CATEGORY_ORDER:
+            subdir, label, language = KINDS[kind]
+            files = [d for d in stored if d['kind'] == kind]
+            present = [d for d in files if d['exists']]
+            if present:
+                status = 'Configured'
+            elif files:
+                status = 'Missing file'
+            else:
+                status = 'Not configured'
+            out.append({
+                'kind': kind,
+                'label': label,
+                'language': language,
+                'directory': 'documents/{0}'.format(subdir),
+                'status': status,
+                'configured': bool(present),
+                'count': len(files),
+                'files': [d['filename'] for d in files],
+            })
+        return out
     finally:
         if owns:
             conn.close()

@@ -69,10 +69,36 @@ MATRIX_LEADERSHIP_TERMS = ['matrix', 'cross-functional', 'cross functional', 'pr
 
 #: Classification bands.  Fixed, so "Excellent" always means the same thing;
 #: the profile's minimum score only decides what is shown, not what it is called.
+#:
+#:   80-100  Excellent / high priority
+#:   70-79   Strong match
+#:   60-69   Worth reviewing
+#:   50-59   Weak / edge match
+#:   < 50    normally hidden from the Jobs list (still stored, still explained)
 EXCELLENT_FROM = 80
 STRONG_FROM = 70
+REVIEW_FROM = 60
+WEAK_FROM = 50
 LABELS = [(EXCELLENT_FROM, 'Excellent match'), (STRONG_FROM, 'Strong match'),
-          (55, 'Worth reviewing'), (0, 'Weak match')]
+          (REVIEW_FROM, 'Worth reviewing'), (WEAK_FROM, 'Weak match'),
+          (0, 'Below threshold')]
+
+#: Titles that signal an execution-level scope rather than a leadership,
+#: program or strategy mandate.  They cost points; they never reject, because
+#: an unusual title can still sit on a real mandate ("Principal Engineer,
+#: Platform" is not junior).
+LOW_SCOPE_TITLE_TERMS = ['specialist', 'coordinator', 'administrator', 'support engineer',
+                         'sysadmin', 'system administrator', 'technician', 'operator',
+                         'analyst', 'consultant']
+
+#: How much a low-relevance domain costs.  Bounded on purpose: the point is to
+#: sink a commercial role to the bottom of the list, not to make it disappear.
+DOWNRANK_TITLE_PENALTY = 14.0
+#: The same word in a title that also names a target responsibility area.
+DOWNRANK_RESCUED_PENALTY = 5.0
+DOWNRANK_BODY_PENALTY = 3.0
+DOWNRANK_MAX = 28.0
+LOW_SCOPE_PENALTY = 6.0
 
 #: Languages the profile does not want to be required to speak.
 EXTRA_LANGUAGES = {'french': 'French', 'francais': 'French', 'franzosisch': 'French',
@@ -116,10 +142,11 @@ class MatchScorer:
         # letting an unpublished detail push a good job below the threshold.
         advisories = self._advisories(job, profile, description)
 
-        total = sum(p['points'] for p in parts)
+        penalty, penalty_concerns = self._downrank(job, profile, title, description)
+        total = sum(p['points'] for p in parts) - penalty
         total = max(0, min(100, int(round(total))))
         reasons = [r for p in parts for r in p['reasons']]
-        concerns = [c for p in parts for c in p['concerns']] + advisories
+        concerns = [c for p in parts for c in p['concerns']] + penalty_concerns + advisories
         terms = []
         for p in parts:
             for term in p.get('terms', []):
@@ -328,6 +355,49 @@ class MatchScorer:
                               concerns=['Published compensation ({0}) is below your expectation'
                                         .format(_chf(top))])
         return self._part('salary', maximum * 0.7, text, reasons=['Salary published'])
+
+    # -- down-ranking (points off, never a rejection) ----------------------
+    def _downrank(self, job, profile, title, description):
+        """Penalty for low-relevance domains and execution-level scope.
+
+        Deliberately a *score* mechanism rather than a filter.  A technically
+        strategic role that happens to mention go-to-market keeps most of its
+        points; a purely commercial one loses enough to sink below the display
+        threshold, and the reason is written down either way.
+        """
+        terms = profile.get('deprioritized_keywords') or []
+        title_hits = _hits(title, terms)
+        body_hits = [t for t in _hits(description, terms) if t not in title_hits]
+
+        # The domain word is only the whole story when the title says nothing
+        # else.  "GTM Engineering Lead" names an engineering mandate in a
+        # commercial domain and keeps most of its points; "GTM Lead" does not.
+        rescued = bool(title_hits) and bool(
+            _hits(title, profile.get('include_titles') or [])
+            or _hits(title, profile.get('secondary_titles') or []))
+        per_title_hit = DOWNRANK_RESCUED_PENALTY if rescued else DOWNRANK_TITLE_PENALTY
+        penalty = min(DOWNRANK_MAX,
+                      len(title_hits) * per_title_hit
+                      + len(body_hits) * DOWNRANK_BODY_PENALTY)
+        concerns = []
+        if title_hits and rescued:
+            concerns.append('Commercial domain in the title ({0}) - confirm how technical the '
+                            'mandate really is'.format(', '.join(title_hits[:3])))
+        elif title_hits:
+            concerns.append('Low-relevance domain in the title: {0}'.format(
+                ', '.join(title_hits[:3])))
+        elif body_hits:
+            concerns.append('Low-relevance domain signals in the description: {0}'.format(
+                ', '.join(body_hits[:3])))
+
+        # An execution-level title only costs points when nothing in the
+        # posting describes leadership, program or transformation scope.
+        scope_hits = _hits(title, LOW_SCOPE_TITLE_TERMS)
+        if scope_hits and not _hits('{0} {1}'.format(title, description), LEADERSHIP_TERMS):
+            penalty += LOW_SCOPE_PENALTY
+            concerns.append('"{0}" scope with no leadership or program mandate described'
+                            .format(scope_hits[0]))
+        return penalty, concerns
 
     # -- advisories (no points, only "things to clarify") ------------------
     def _advisories(self, job, profile, description):

@@ -5,6 +5,9 @@
     python3 run.py --no-browser
     python3 run.py --port 9000
 
+    python3 run.py export-workspace ~/Desktop/job-assistant-backup.zip
+    python3 run.py import-workspace ~/Desktop/job-assistant-backup.zip
+
 This file only orchestrates startup: dependency check, directories, database
 migration (with a backup), the server and the browser.  All application logic
 lives in the ``jobscanner`` package.
@@ -104,7 +107,21 @@ def prepare_data():
         say('Existing database carried over from {0} (the original file is untouched).'.format(
             jsdb.LEGACY_DB_PATH.name))
     say('Database:  {0}'.format(jsdb.get_db_path()))
-    say('Documents: {0}'.format(documents_mod.DOCUMENTS_DIR))
+    say('Documents: {0}'.format(documents_mod.documents_dir()))
+
+
+#: Verbs handled by tools/workspace.py rather than by the server.  They are
+#: recognised before argparse so the launcher's own flags stay unambiguous.
+WORKSPACE_VERBS = {'export-workspace': 'export', 'import-workspace': 'import',
+                   'inspect-workspace': 'inspect'}
+
+
+def run_workspace_command(argv):
+    """Delegate ``run.py export-workspace <path>`` to the workspace CLI."""
+    sys.path.insert(0, str(BASE_DIR))
+    from tools import workspace as workspace_cli
+
+    return workspace_cli.main([WORKSPACE_VERBS[argv[0]]] + list(argv[1:]))
 
 
 def main():
@@ -166,6 +183,8 @@ def main():
 
 if __name__ == '__main__':
     try:
+        if len(sys.argv) > 1 and sys.argv[1] in WORKSPACE_VERBS:
+            raise SystemExit(run_workspace_command(sys.argv[1:]))
         raise SystemExit(main())
     except KeyboardInterrupt:
         raise SystemExit(0)

@@ -8,6 +8,11 @@ import re
 RESULT_KEYS = ('fit_summary', 'strongest_matches', 'gaps', 'seniority_fit',
                'application_angle', 'salary_commentary')
 
+#: How long the two lists may get.  A model that returns twelve "strengths"
+#: is padding, and a wall of text is not an analysis - so the contract caps
+#: them here rather than hoping the prompt is obeyed.
+LIMITS = {'strongest_matches': 5, 'gaps': 3}
+
 
 class AIError(RuntimeError):
     """Any provider failure. Never fatal - the caller falls back to templates."""
@@ -28,7 +33,8 @@ class AIResult(dict):
             if key in ('strongest_matches', 'gaps'):
                 if isinstance(value, str):
                     value = [line.strip('-* ') for line in value.splitlines() if line.strip()]
-                result[key] = [str(item).strip() for item in (value or []) if str(item).strip()][:6]
+                items = [str(item).strip() for item in (value or []) if str(item).strip()]
+                result[key] = items[:LIMITS[key]]
             else:
                 result[key] = str(value or '').strip()
         return result

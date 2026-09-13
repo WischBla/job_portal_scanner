@@ -21,6 +21,9 @@ def get_profile():
         return {
             'person': load_person(conn),
             'documents': documents_mod.list_documents(conn),
+            # Every supported category, including the ones with no file yet -
+            # those are reported as "Not configured" rather than invented.
+            'document_categories': documents_mod.categories(conn),
             'document_kinds': [{'kind': k, 'label': v[1], 'language': v[2]}
                                for k, v in documents_mod.KINDS.items()],
         }
