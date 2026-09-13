@@ -1,0 +1,95 @@
+README.md
+  s_a0c2c2f7f72e8e::t_37d3504b91db0c 262-269
+  s_a0c2c2f7f72e8e::t_06422829b0dadc 167-224,325-384,404
+tests/test_api_v2.py
+  s_a0c2c2f7f72e8e::t_cb7e41e29313bb 157-158,160-181
+static/app.js
+  s_a0c2c2f7f72e8e::t_095c75525ea89c 938-939,941-1004,1006-1008,1010-1027,1029-1031,1033-1043,1045-1048,1050-1062,1064-1084
+  s_a0c2c2f7f72e8e::t_2561d7c7d33bd6 645-646,669-676,680-685,696,698-699,711-714,727,733-747
+  s_a0c2c2f7f72e8e::t_8b73e10425070b 6-12,155-173,186,208-228,233
+  s_a0c2c2f7f72e8e::t_3eeaafd44f6d14 110
+  s_a0c2c2f7f72e8e::t_bb29c13308cee8 748,1178-1229,1257-1300
+  s_a0c2c2f7f72e8e::t_183fde8071b149 749,1301
+jobscanner/documents.py
+  s_a0c2c2f7f72e8e::t_91ae4814d9ceda 5-9,17-31,58-59,83,102,111-118,133,212
+  s_a0c2c2f7f72e8e::t_6f1b1ce34b0573 220-261
+  s_a0c2c2f7f72e8e::t_bef92a69e4ea37 262-264
+jobscanner/ai/service.py
+  s_a0c2c2f7f72e8e::t_ef0483365a9446 21,137
+  s_a0c2c2f7f72e8e::t_5d66dfa77fbd58 45-52,192-196,212-216
+jobscanner/scoring.py
+  s_a0c2c2f7f72e8e::t_850954a6dc8958 72-77,80-81,83-96,99-101,145-146,149,359-370,379,381-382,387-400
+  s_a0c2c2f7f72e8e::t_47398ba7dfa462 97-98,371-378,380,383-386
+  s_a0c2c2f7f72e8e::t_e8f01b2d5b7e21 401
+run.py
+  s_a0c2c2f7f72e8e::t_6f1b1ce34b0573 110
+  s_a0c2c2f7f72e8e::t_9842d401e8695b 8-10,111-124,186-187
+jobscanner/api/config_api.py
+  s_a0c2c2f7f72e8e::t_c35d834fea6139 20-21,318
+  s_a0c2c2f7f72e8e::t_2ec40bcaf60102 3-5,9-10,12-13,16-17,63-71,76-102,310-317,319-375
+  s_a0c2c2f7f72e8e::t_9860e8513e71e8 376-377
+jobscanner/api/profile_api.py
+  s_a0c2c2f7f72e8e::t_c35d834fea6139 24-26
+jobscanner/apply/fields.py
+  s_a0c2c2f7f72e8e::t_1396c3ef65bfaa 71-80
+jobscanner/ai/base.py
+  s_a0c2c2f7f72e8e::t_ef0483365a9446 11-15,36-37
+jobscanner/db.py
+  s_a0c2c2f7f72e8e::t_95a9fc0e0a4e47 518-527
+  s_a0c2c2f7f72e8e::t_3edd5994ccb7dc 28-34,47-59
+  s_a0c2c2f7f72e8e::t_9c1980b610d318 481-496,528,681-716
+  s_a0c2c2f7f72e8e::t_b776dae3195e6d 60-61,717-718
+jobscanner/workspace.py
+  s_a0c2c2f7f72e8e::t_e309134bb76af1 1-440
+static/styles.css
+  s_a0c2c2f7f72e8e::t_b339e0f9c28bf5 215-227
+  s_a0c2c2f7f72e8e::t_3eeaafd44f6d14 89
+tests/test_workspace.py
+  s_a0c2c2f7f72e8e::t_0f17b34cd7121a 84-85,280
+  s_a0c2c2f7f72e8e::t_4b1b32e0769112 438-477
+  s_a0c2c2f7f72e8e::t_882668f453a80e 1-83,86-279,281-437,478-513
+tests/test_apply_assistant.py
+  s_a0c2c2f7f72e8e::t_cb7e41e29313bb 71-80,82-84,87,94-95,142
+  s_a0c2c2f7f72e8e::t_0f17b34cd7121a 81
+tools/workspace.py
+  s_a0c2c2f7f72e8e::t_01760f6b640f61 1-140
+jobscanner/api/jobs_api.py
+  s_a0c2c2f7f72e8e::t_ecc0d38f7b7ebc 29-36,78-97
+  s_a0c2c2f7f72e8e::t_7762b588c0a0fc 98-99
+jobscanner/person.py
+  s_a0c2c2f7f72e8e::t_95a9fc0e0a4e47 18-19,26
+  s_a0c2c2f7f72e8e::t_7076b739459d45 1,5-11,29-36,38-42,47-48,51-52,54-58,60-72
+jobscanner/jobs_service.py
+  s_a0c2c2f7f72e8e::t_ecc0d38f7b7ebc 29-37,233-286
+  s_a0c2c2f7f72e8e::t_56fff898ffb362 21-28,47,53-65,148-150,177-178,181,184-189
+jobscanner/schema_v2.py
+  s_a0c2c2f7f72e8e::t_56fff898ffb362 264-266,295-297
+  s_a0c2c2f7f72e8e::t_95a9fc0e0a4e47 45,47-49
+tests/test_migration.py
+  s_a0c2c2f7f72e8e::t_717cb944e4c468 96-99
+  s_a0c2c2f7f72e8e::t_cb7e41e29313bb 126-131
+tests/test_configuration.py
+  s_a0c2c2f7f72e8e::t_80013a7d762ba9 387-389,394-395
+  s_a0c2c2f7f72e8e::t_a96c63ceac7e15 339,346-347
+  s_a0c2c2f7f72e8e::t_aa716e86b1bd16 1-83,85-88,92-338,340-345,348-386,390-393,396-418
+  s_a0c2c2f7f72e8e::t_e6dbc80c1bd9cc 84,89-91
+jobscanner/profile.py
+  s_a0c2c2f7f72e8e::t_8b7e3a3fd14330 76-80
+  s_a0c2c2f7f72e8e::t_0cabc705555368 114-117,124,127-128,216-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "9d6966912e6f6c093b997455f732d8b67397d6e0",
+  "prompts": {},
+  "sessions": {
+    "s_a0c2c2f7f72e8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b4a0e2e-1c99-4162-9401-33b5961e5136",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
