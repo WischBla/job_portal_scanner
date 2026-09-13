@@ -214,6 +214,19 @@ td.actions { text-align: right; white-space: nowrap; }
 }
 .toast.error { background: var(--bad); }
 
+/* An offer inside the toast: how Ignore stays undoable without a dialog. */
+.toast-action {
+  background: none; border: 1px solid rgba(255, 255, 255, .5); color: #fff;
+  font: inherit; font-weight: 600; letter-spacing: .04em; cursor: pointer;
+  margin-left: 14px; padding: 2px 9px; border-radius: var(--radius);
+}
+.toast-action:hover { background: rgba(255, 255, 255, .15); }
+#ignored-btn.on { border-color: var(--accent); color: var(--accent); }
+
+/* Holds the page height for a moment after a card leaves the list, so the
+   list cannot slide up under the pointer. Invisible, and short-lived. */
+.list-spacer { flex: none; pointer-events: none; }
+
 /* --------------------------------------------------------------- notices */
 .notice { border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: var(--radius); font-size: 13px; color: var(--text-soft); margin-bottom: 16px; }
 .notice.warn { border-left-color: var(--warn); }

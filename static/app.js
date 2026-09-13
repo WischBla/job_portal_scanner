@@ -4,7 +4,7 @@
 'use strict';
 
 const state = { view: 'jobs', jobs: [], counts: {}, config: null, profile: null,
-  feedbackReasons: [] };
+  feedbackReasons: [], listMode: 'active', lastScan: null };
 
 /* Why a job was a yes or a no. Recorded for later calibration; nothing retrains. */
 const FEEDBACK_REASONS_NEGATIVE = ['Too stakeholder-heavy', 'Too political / external',
@@ -30,6 +30,11 @@ function reasonsFor(verdict) {
 const $ = (sel, root) => (root || document).querySelector(sel);
 const el = (tag, attrs, children) => {
   const node = document.createElement(tag);
+  // A <button> without an explicit type is a submit button. Nothing in this
+  // app is ever meant to submit anything, so the default is set here once
+  // instead of relying on browser behaviour at 60 call sites; an explicit
+  // `type` in attrs still wins.
+  if (tag === 'button') node.type = 'button';
   Object.entries(attrs || {}).forEach(([key, value]) => {
     if (value === null || value === undefined || value === false) return;
     if (key === 'class') node.className = value;
@@ -58,13 +63,24 @@ async function api(path, options) {
 }
 
 let toastTimer = null;
-function toast(message, isError) {
-  const node = $('#toast');
-  node.textContent = message;
+/* `action` turns the toast into an offer - {label, onclick} - which is how
+   Ignore stays reversible without a confirmation dialog in front of every
+   click. An actionable toast stays up longer, because it is only useful for
+   as long as it is still on screen. */
+function toast(message, isError, action) {
+  const node = clear($('#toast'));
+  node.appendChild(el('span', { text: message }));
+  if (action) {
+    node.appendChild(el('button', {
+      class: 'toast-action', text: action.label,
+      onclick: () => { clearTimeout(toastTimer); node.hidden = true; action.onclick(); },
+    }));
+  }
   node.className = 'toast' + (isError ? ' error' : '');
   node.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, isError ? 7000 : 3500);
+  toastTimer = setTimeout(() => { node.hidden = true; },
+    isError ? 7000 : (action ? 12000 : 3500));
 }
 
 function dialog(title, body) {
@@ -110,6 +126,144 @@ function readForm(root) {
 }
 
 /* ============================== JOBS ============================== */
+
+/* ------------------------------------------------- viewport anchoring ---
+   A job-card action must never move the page under the pointer.
+
+   It used to, for two reasons. Every action tore the whole list down -
+   `renderJobs` clears #job-list and rebuilds every card - and whenever the
+   rebuilt list ended up shorter than the current scroll position the browser
+   clamped the scroll. Measured on a five-job list: four Ignore clicks walked
+   the page 2626 -> 1971 -> 1315 -> 660 -> 0 px, i.e. back to the top. Worse,
+   the card below a removed one slid into the vacated slot, so *its* Ignore
+   button landed exactly under the cursor that had just clicked Ignore - which
+   is how the wrong job gets ignored.
+
+   So: change one card instead of rebuilding the list, and anchor whatever
+   still moves on a card whose pixel position is put back afterwards. The
+   restore runs in the same task as the DOM change, so the browser lays out
+   once and there is nothing to flicker. */
+const maxScroll = () =>
+  Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+
+function cardNode(jobId) {
+  return jobId === null || jobId === undefined
+    ? null : $('#job-list > .card[data-job-id="' + jobId + '"]');
+}
+
+/* The id of the card that should stay put when `node` disappears: the one
+   after it, or the one before it when it was the last. */
+function neighbourId(node) {
+  const step = (from, key) => {
+    let sibling = from ? from[key] : null;
+    while (sibling && !(sibling.classList && sibling.classList.contains('card'))) {
+      sibling = sibling[key];
+    }
+    return sibling;
+  };
+  const sibling = step(node, 'nextElementSibling') || step(node, 'previousElementSibling');
+  const id = sibling && sibling.dataset ? sibling.dataset.jobId : '';
+  return id ? Number(id) : null;
+}
+
+/* Near the bottom of a short list there is nothing below to hold the viewport
+   down: the document becomes too short for the current scroll position and the
+   browser clamps it, which drags the card above up under the cursor that just
+   clicked Ignore. An invisible spacer keeps the page as tall as it was, so
+   nothing moves at all. It sits after the last card, it is never a card, and
+   it takes itself out again the moment it can do so without moving anything. */
+function holdPageHeight(pixels) {
+  if (pixels <= 0) return;
+  const list = $('#job-list');
+  let spacer = $('#job-list > .list-spacer');
+  if (!spacer) {
+    spacer = el('div', { class: 'list-spacer', 'aria-hidden': 'true' });
+    list.appendChild(spacer);
+  }
+  spacer.style.height = ((parseFloat(spacer.style.height) || 0) + pixels) + 'px';
+  if (spacer.dataset.watching) return;
+  spacer.dataset.watching = '1';
+  const release = () => {
+    const held = parseFloat(spacer.style.height) || 0;
+    const room = document.documentElement.scrollHeight - held;
+    if (!spacer.isConnected || window.scrollY + window.innerHeight <= room) {
+      window.removeEventListener('scroll', release);
+      spacer.remove();
+    }
+  };
+  window.addEventListener('scroll', release, { passive: true });
+}
+
+/* Give back the height a restored card no longer needs. */
+function releasePageHeight(pixels) {
+  const spacer = $('#job-list > .list-spacer');
+  if (!spacer) return;
+  const left = (parseFloat(spacer.style.height) || 0) - pixels;
+  if (left > 0) spacer.style.height = left + 'px';
+  else spacer.remove();
+}
+
+/* Take one card out without letting the page move underneath the pointer.
+
+   Two different things would move it, and they are told apart by the document
+   height, not by the scroll position: scrolling *down* the page to follow the
+   removed card is the anchor doing its job, while the browser clamping the
+   scroll because the document no longer reaches that far is the damage. Pad
+   the shortfall first, then let the anchor put the page back. */
+function removeCard(node, anchorId) {
+  const wanted = window.scrollY + window.innerHeight;
+  const point = anchor(anchorId);
+  node.remove();
+  const shortfall = wanted - document.documentElement.scrollHeight;
+  if (shortfall > 0) holdPageHeight(shortfall);
+  releaseAnchor(point);
+}
+
+function anchor(jobId) {
+  const node = cardNode(jobId);
+  return node ? { jobId, top: node.getBoundingClientRect().top }
+              : { scrollY: window.scrollY };
+}
+
+function releaseAnchor(point) {
+  const node = point.jobId === undefined ? null : cardNode(point.jobId);
+  if (node) {
+    // Put the anchored card back on the pixel row it occupied before.
+    const delta = node.getBoundingClientRect().top - point.top;
+    if (delta) window.scrollTo(0, Math.min(Math.max(0, window.scrollY + delta), maxScroll()));
+  } else if (point.scrollY !== undefined && window.scrollY !== point.scrollY) {
+    window.scrollTo(0, Math.min(point.scrollY, maxScroll()));
+  }
+}
+
+/* Card-anchored when a job id is given, scroll-anchored as a fallback. */
+function keepingPosition(jobId, mutate) {
+  const point = anchor(jobId);
+  mutate();
+  releaseAnchor(point);
+}
+
+/* Swap one card for its updated self. The list is not rebuilt and, crucially,
+   not re-sorted: a verdict must not move the job the user is reading. */
+function replaceCard(job) {
+  const node = cardNode(job.id);
+  if (!node) { renderJobs(); return; }
+  keepingPosition(job.id, () => node.replaceWith(jobCard(job)));
+}
+
+/* The counts come from the backend. An in-place action adjusts only the
+   numbers it actually changed, and it uses the classification the backend
+   already put on the card - no score threshold is re-implemented here. */
+function adjustCounts(job, delta) {
+  const counts = state.counts || (state.counts = {});
+  const bump = (key, by) => { counts[key] = Math.max(0, (counts[key] || 0) + by); };
+  bump('total', delta);
+  bump('ignored', -delta);
+  if (job.state === 'SAVED') bump('saved', delta);
+  if (job.classification === 'Exceptional') bump('excellent', delta);
+  else if (job.classification === 'Strong') bump('strong', delta);
+}
+
 function compBlock(comp) {
   if (!comp) return el('div', { class: 'comp muted', text: 'Estimate switched off in Config.' });
   const chf = (n) => "CHF " + Math.round(n / 1000) + 'k';
@@ -247,11 +401,15 @@ function jobCard(job) {
     el('button', { class: 'small', onclick: () => showAnalysis(job), text: 'Analysis' }),
     el('span', { class: 'spacer' }),
     el('button', { class: 'small ghost', onclick: () => addToApplications(job), text: 'Track application' }),
-    el('button', { class: 'small ghost danger', onclick: () => setJobState(job.id, 'IGNORED'), text: 'Ignore' }),
+    job.state === 'IGNORED'
+      ? el('button', { class: 'small', onclick: () => restoreJob(job), text: 'Restore' })
+      : el('button', { class: 'small ghost danger', onclick: () => ignoreJob(job), text: 'Ignore' }),
   ]);
 
-  return el('div', { class: 'card' + (job.state === 'IGNORED' ? ' ignored' : '') },
-    [head, incomplete, detail, verdict, actions]);
+  // The id is what every in-place update and every viewport anchor addresses
+  // the card by, so it has to survive a re-render.
+  return el('div', { class: 'card' + (job.state === 'IGNORED' ? ' ignored' : ''),
+    'data-job-id': job.id }, [head, incomplete, detail, verdict, actions]);
 }
 
 function escapeHtml(value) {
@@ -273,14 +431,15 @@ function shortStamp(value) {
   return stamp.toISOString().slice(0, 10);
 }
 
-/* A verdict is stored and nothing else: no rule is rewritten and no job is
-   removed, so the list the user is looking at does not move under them. */
+/* A verdict is stored and nothing else: no rule is rewritten, no job is
+   removed and the list is not re-sorted, so the job the user is reading stays
+   exactly where it is. Only its own card is redrawn. */
 async function setFeedback(job, verdict, reason) {
   try {
     const updated = await api('/api/jobs/' + job.id + '/feedback', {
       method: 'POST', body: { verdict, reason: reason || '' } });
-    Object.assign(job, { feedback: updated.feedback, feedback_reason: updated.feedback_reason });
-    renderJobs();
+    Object.assign(job, updated);
+    replaceCard(job);
     toast(verdict ? 'Noted: ' + verdict + '. Stored for later calibration only.' : 'Verdict cleared.');
   } catch (err) { toast(err.message, true); }
 }
@@ -288,35 +447,145 @@ async function setFeedback(job, verdict, reason) {
 function renderJobs() {
   const list = clear($('#job-list'));
   if (!state.jobs.length) {
-    list.appendChild(el('div', { class: 'empty', text: 'No jobs yet. Click "Scan for new jobs".' }));
+    list.appendChild(el('div', { class: 'empty', text: state.listMode === 'ignored'
+      ? 'Nothing ignored.' : 'No jobs yet. Click "Scan for new jobs".' }));
     return;
   }
   state.jobs.forEach((job) => list.appendChild(jobCard(job)));
 }
 
-async function loadJobs() {
-  const data = await api('/api/jobs');
+/* A full reload of the list. Used when the data really did change wholesale
+   (a scan, an import); it still keeps the viewport where it was. */
+async function loadJobs(anchorJobId) {
+  const ignored = state.listMode === 'ignored';
+  const data = await api('/api/jobs' + (ignored ? '?state=IGNORED' : ''));
   state.jobs = data.jobs;
   state.counts = data.counts;
-  renderJobs();
-  const counts = data.counts;
-  const scan = data.last_scan;
+  state.lastScan = data.last_scan;
+  keepingPosition(anchorJobId === undefined ? null : anchorJobId, renderJobs);
+  renderSummary();
+  renderIgnoredToggle();
+}
+
+function renderSummary() {
+  const counts = state.counts || {};
+  if (state.listMode === 'ignored') {
+    $('#job-summary').textContent = state.jobs.length
+      + ' ignored  ·  Restore puts a job back into the list';
+    return;
+  }
   const parts = [counts.total + ' opportunities', counts.excellent + ' exceptional fit',
     counts.strong + ' strong fit', counts.saved + ' saved'];
+  const scan = state.lastScan;
   if (scan && scan.finished_at) parts.push('last scan ' + scan.finished_at.replace('T', ' ').replace('Z', ''));
   $('#job-summary').textContent = parts.join('  ·  ');
 }
 
+/* Ignored jobs stay reachable: the same screen, filtered. Not a new view. */
+function renderIgnoredToggle() {
+  const button = $('#ignored-btn');
+  if (!button) return;
+  const ignored = state.listMode === 'ignored';
+  button.textContent = ignored ? 'Back to jobs' : 'Ignored (' + (state.counts.ignored || 0) + ')';
+  button.classList.toggle('on', ignored);
+}
+
+async function toggleIgnored() {
+  state.listMode = state.listMode === 'ignored' ? 'active' : 'ignored';
+  window.scrollTo(0, 0);          // a different list: start at its top
+  try { await loadJobs(); } catch (err) { toast(err.message, true); }
+}
+
+/* Save / Unsave: one card is replaced where it stands. */
 async function setJobState(jobId, newState) {
+  const job = state.jobs.find((entry) => entry.id === jobId);
   try {
-    await api('/api/jobs/' + jobId + '/state', { method: 'POST', body: { state: newState } });
-    await loadJobs();
+    const updated = await api('/api/jobs/' + jobId + '/state',
+      { method: 'POST', body: { state: newState } });
+    if (!job) { await loadJobs(); return; }
+    const wasSaved = job.state === 'SAVED';
+    Object.assign(job, updated);
+    replaceCard(job);
+    if (wasSaved !== (job.state === 'SAVED')) {
+      state.counts.saved = Math.max(0, (state.counts.saved || 0) + (wasSaved ? -1 : 1));
+      renderSummary();
+    }
   } catch (err) { toast(err.message, true); }
+}
+
+/* Ignore is the one action here with real consequences, so it is reversible
+   rather than guarded by a dialog: the card leaves the list, the page does
+   not move, and the toast offers UNDO long enough to catch a mis-click.
+   The previous state travels with the offer, so a saved job comes back
+   saved. */
+async function ignoreJob(job) {
+  const previous = job.state;
+  const index = state.jobs.indexOf(job);
+  const node = cardNode(job.id);
+  const anchorId = neighbourId(node);
+  try {
+    await api('/api/jobs/' + job.id + '/state', { method: 'POST', body: { state: 'IGNORED' } });
+  } catch (err) { toast(err.message, true); return; }
+
+  if (index >= 0) state.jobs.splice(index, 1);
+  adjustCounts(job, -1);                 // reads the state the job had
+  job.state = 'IGNORED';
+  if (node) removeCard(node, anchorId);
+  if (!state.jobs.length) renderJobs();  // nothing left: say so
+  renderSummary();
+  renderIgnoredToggle();
+  toast('Job ignored', false,
+    { label: 'UNDO', onclick: () => undoIgnore(job, previous, index) });
+}
+
+async function undoIgnore(job, previous, index) {
+  try {
+    const updated = await api('/api/jobs/' + job.id + '/state',
+      { method: 'POST', body: { state: previous === 'IGNORED' ? 'SEEN' : previous } });
+    const list = $('#job-list');
+    if (!state.jobs.length) clear(list);          // drop the "nothing left" line
+    Object.assign(job, updated);
+    const position = Math.max(0, Math.min(index, state.jobs.length));
+    state.jobs.splice(position, 0, job);
+    const before = list.children[position] || null;
+    const anchorId = before && before.dataset && before.dataset.jobId
+      ? Number(before.dataset.jobId) : null;
+    let restored = null;
+    keepingPosition(anchorId, () => {
+      restored = list.insertBefore(jobCard(job), before);
+    });
+    releasePageHeight(restored.getBoundingClientRect().height);
+    adjustCounts(job, 1);
+    renderSummary();
+    renderIgnoredToggle();
+    toast('Restored: ' + job.title);
+  } catch (err) { toast(err.message, true); }
+}
+
+/* Restore from the Ignored list. The state the job held before it was ignored
+   is not recorded, so it comes back as SEEN - where every job that is neither
+   saved nor applied sits. */
+async function restoreJob(job) {
+  const node = cardNode(job.id);
+  const anchorId = neighbourId(node);
+  try {
+    await api('/api/jobs/' + job.id + '/state', { method: 'POST', body: { state: 'SEEN' } });
+  } catch (err) { toast(err.message, true); return; }
+  const index = state.jobs.indexOf(job);
+  if (index >= 0) state.jobs.splice(index, 1);
+  job.state = 'SEEN';
+  adjustCounts(job, 1);
+  if (node) removeCard(node, anchorId);
+  if (!state.jobs.length) renderJobs();
+  renderSummary();
+  renderIgnoredToggle();
+  toast('Restored: ' + job.title);
 }
 
 async function scan() {
   const button = $('#scan-btn');
   button.disabled = true;
+  state.listMode = 'active';        // new findings belong in the active list
   $('#scan-status').textContent = 'Scanning Swiss sources...';
   try {
     const result = await api('/api/scan', { method: 'POST' });
@@ -429,6 +698,7 @@ function renderAlertPreview(wrap, data) {
         const outcome = await api('/api/jobs/import/linkedin',
           { method: 'POST', body: { jobs: chosen } });
         closeDialog();
+        state.listMode = 'active';
         await loadJobs();
         toast(outcome.imported + ' imported, ' + outcome.linked + ' already known');
       } catch (err) {
@@ -457,7 +727,9 @@ function addDescriptionDialog(job) {
           await api('/api/jobs/' + job.id + '/description',
             { method: 'POST', body: { description: box.value } });
           closeDialog();
-          await loadJobs();
+          // Re-scoring can move the job in the ranking; anchoring on the card
+          // keeps it in view wherever it lands.
+          await loadJobs(job.id);
           toast('Description saved. The job was re-scored.');
         } catch (err) {
           event.target.disabled = false;
@@ -550,7 +822,7 @@ async function applyToJob(job) {
       el('button', { class: 'small', text: 'Close browser window',
         onclick: async () => { await api('/api/apply/close', { method: 'POST' }); toast('Browser closed.'); } }),
     ]));
-    await loadJobs();
+    await loadJobs(job.id);
   } catch (err) {
     clear(body);
     body.appendChild(el('div', { class: 'notice warn', text: err.message }));
@@ -1522,6 +1794,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tab.addEventListener('click', () => switchView(tab.dataset.view)));
   $('#scan-btn').addEventListener('click', scan);
   $('#import-linkedin-btn').addEventListener('click', importLinkedInDialog);
+  $('#ignored-btn').addEventListener('click', toggleIgnored);
   $('#new-application').addEventListener('click', newApplicationDialog);
   $('#dialog-close').addEventListener('click', closeDialog);
   $('#dialog').addEventListener('click', (event) => { if (event.target.id === 'dialog') closeDialog(); });

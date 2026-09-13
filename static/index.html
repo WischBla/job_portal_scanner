@@ -12,10 +12,10 @@
   <div class="wrap">
     <span class="brand">Job Assistant</span>
     <nav id="nav">
-      <button class="tab" data-view="jobs">Jobs</button>
-      <button class="tab" data-view="applications">Applications</button>
-      <button class="tab" data-view="profile">Profile</button>
-      <button class="tab" data-view="config">Config</button>
+      <button class="tab" type="button" data-view="jobs">Jobs</button>
+      <button class="tab" type="button" data-view="applications">Applications</button>
+      <button class="tab" type="button" data-view="profile">Profile</button>
+      <button class="tab" type="button" data-view="config">Config</button>
     </nav>
   </div>
 </header>
@@ -25,8 +25,9 @@
   <!-- ============================ JOBS ============================ -->
   <section id="view-jobs" class="view">
     <div class="action-row">
-      <button id="scan-btn" class="primary">Scan for new jobs</button>
-      <button id="import-linkedin-btn">Import LinkedIn Alert</button>
+      <button id="scan-btn" type="button" class="primary">Scan for new jobs</button>
+      <button id="import-linkedin-btn" type="button">Import LinkedIn Alert</button>
+      <button id="ignored-btn" type="button" class="ghost">Ignored</button>
       <span id="scan-status" class="muted"></span>
     </div>
     <div id="job-summary" class="summary"></div>
@@ -37,7 +38,7 @@
   <!-- ======================== APPLICATIONS ======================== -->
   <section id="view-applications" class="view">
     <div class="action-row">
-      <button id="new-application" class="primary">New application</button>
+      <button id="new-application" type="button" class="primary">New application</button>
       <span id="application-status" class="muted"></span>
     </div>
     <div id="pipeline" class="pipeline"></div>
@@ -60,7 +61,7 @@
   <div class="dialog-card">
     <div class="dialog-head">
       <h2 id="dialog-title"></h2>
-      <button id="dialog-close" class="ghost" aria-label="Close">Close</button>
+      <button id="dialog-close" type="button" class="ghost" aria-label="Close">Close</button>
     </div>
     <div id="dialog-body" class="dialog-body"></div>
   </div>
