@@ -25,6 +25,7 @@ from .html_text import strip_html
 PAGE_SIZE = 25
 MAX_PAGES = 12
 MAX_DETAILS = 120
+DETAIL_WORKERS = 3
 
 _ROW = re.compile(r'<tr[^>]+class="[^"]*data-row[^"]*"[^>]*>(.*?)</tr>', re.S | re.I)
 _LINK = re.compile(r'<a[^>]+href="([^"]*/job/[^"]+)"[^>]*class="[^"]*jobTitle-link[^"]*"[^>]*>(.*?)</a>'
@@ -58,8 +59,12 @@ class SuccessFactorsAdapter(JobSourceAdapter):
 
         rows = self._all_rows(base, location)
         wanted = rows[:MAX_DETAILS]
+        # Career sites are ordinary web servers behind a CDN, not an API with a
+        # published budget: a handful of detail pages at a time is polite and
+        # still finishes a board in seconds.
         descriptions = dict(fetch_in_parallel(
-            wanted, lambda row: (row['url'], self._description(row['url']))))
+            wanted, lambda row: (row['url'], self._description(row['url'])),
+            max_workers=DETAIL_WORKERS))
 
         jobs = []
         for row in rows:

@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from .. import alert_import
 from .. import applications as applications_mod
-from .. import jobs_service, pipeline
+from .. import enrichment, jobs_service, pipeline
 from ..ai import service as ai_service
 from ..apply import ApplyError, assistant
 from ..db import connect, now_iso, row_to_dict
@@ -41,14 +41,25 @@ def _person(conn):
 
 
 @router.get('/jobs')
-def list_jobs(state: str = '', limit: int = 200):
+def list_jobs(state: str = '', limit: int = 200, filter: str = jobs_service.ALL):
+    """The Jobs list.
+
+    ``filter`` selects one of the views in ``jobs_service.FILTERS`` and
+    defaults to *all active jobs*.  It is a view and only a view: no value of
+    it changes a job's state, and there is no score threshold anywhere on this
+    path.
+    """
+    view = filter if filter in jobs_service.FILTERS else jobs_service.ALL
     with connect() as conn:
         settings = load_settings(conn)
         include_ignored = state == 'IGNORED' or not settings.get('scan_hide_ignored', True)
         return {
             'jobs': jobs_service.list_cards(conn, state=state, limit=limit,
-                                            include_ignored=include_ignored),
+                                            include_ignored=include_ignored, view=view),
             'counts': jobs_service.counts(conn),
+            'filter': view,
+            'filters': [{'key': key, 'label': label}
+                        for key, label in jobs_service.FILTER_LABELS],
             'last_scan': _last_scan(conn),
         }
 
@@ -268,6 +279,25 @@ def add_job_description(job_id: int, payload: DescriptionPayload):
     if card is None:
         raise HTTPException(404, 'Job not found')
     return card
+
+
+@router.post('/jobs/{job_id}/enrich')
+def enrich_one_job(job_id: int):
+    """Go and look for this job's canonical description, once.
+
+    Local duplicates first, then the employer's own configured job board, then
+    the public original posting.  Never LinkedIn.  If nothing reliable is
+    found the job is left exactly as it was and the card says so - a failed
+    enrichment is not allowed to be destructive.
+    """
+    with connect() as conn:
+        row = conn.execute('SELECT id FROM discovered_jobs WHERE id=?', (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, 'Job not found')
+        result = enrichment.enrich_job(job_id, conn)
+        result['card'] = jobs_service.get_card(job_id, conn, with_ai=False)
+        result['counts'] = jobs_service.counts(conn)
+        return result
 
 
 @router.post('/jobs/rescore')

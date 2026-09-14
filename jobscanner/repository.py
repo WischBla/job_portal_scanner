@@ -3,11 +3,23 @@
 import json
 
 from . import fit
-from .db import now_iso, row_to_dict, utc_now_iso
+from .db import load_profile, now_iso, row_to_dict, utc_now_iso
 from .filters import GROUP_LABELS, rejection_group
 from .scoring import EXCELLENT_FROM, STRONG_FROM
 
 JOB_STATES = ('NEW', 'SEEN', 'SAVED', 'IGNORED', 'APPLIED', 'EXPIRED')
+
+#: Why a job left the active list.  EXPIRED is one state with two honest
+#: causes, and conflating them is what made "expired" mean "we did not see it
+#: this time".
+GONE_FROM_SOURCE = 'source_confirmed_gone'
+FILTERED_OUT = 'no_longer_matches_filters'
+
+#: How many *successful, authoritative* scans of a healthy source have to miss
+#: a job before it is retired.  One miss is not evidence: boards paginate,
+#: rate-limit, drop a posting for an hour and put it back.  Two consecutive
+#: clean reconciliations are a confirmation.
+EXPIRE_AFTER_MISSES = 2
 
 #: Result orderings offered in the UI.  'score' is the default: best match
 #: first, newest first within the same score.
@@ -29,7 +41,7 @@ _JOB_COLUMNS = [
     'work_model', 'office_days', 'seniority', 'remote', 'job_url', 'description', 'excerpt',
     'published_at', 'salary_min', 'salary_max', 'salary_currency', 'salary_period',
     'match_score', 'match_label', 'match_reasons', 'matched_terms', 'match_breakdown',
-    'match_concerns',
+    'match_concerns', 'needs_details',
 ] + list(fit.SCORE_COLUMNS)
 _JSON_COLUMNS = ('match_reasons', 'matched_terms', 'match_breakdown', 'match_concerns')
 
@@ -145,13 +157,27 @@ class JobRepository:
             'match_breakdown': json.dumps(scored['breakdown'], ensure_ascii=False),
             'match_concerns': json.dumps(scored['concerns'], ensure_ascii=False),
         })
-        values.update(fit.score_columns(scored))
+        values.update(fit.score_columns(scored, job))
+        # ``needs_details`` predates the evidence model and is still what the
+        # card and the import flow read.  It is now derived rather than set by
+        # hand, so the two can never disagree.
+        values['needs_details'] = 1 if values['enrichment_state'] == 'NEEDS_ENRICHMENT' else 0
 
         if existing:
-            assignments = ','.join('{0}=?'.format(c) for c in _JOB_COLUMNS)
+            # A refresh must never make a job *poorer*.  The same posting can
+            # arrive from an aggregator as a stub after it arrived from the
+            # company's own board in full - and an enriched or hand-pasted
+            # description is work that a rescan has no business undoing.  When
+            # the incoming text is shorter than what is stored, the stored one
+            # is kept and the job is re-scored on it.
+            columns = list(_JOB_COLUMNS)
+            if not self._is_richer(values.get('description'), existing['id']):
+                columns = [c for c in columns if c not in ('description', 'excerpt')]
+                values = self._rescored_on_stored_text(job, values, existing['id'])
+            assignments = ','.join('{0}=?'.format(c) for c in columns)
             self.conn.execute(
                 'UPDATE discovered_jobs SET {0}, last_seen=? WHERE id=?'.format(assignments),
-                [values[c] for c in _JOB_COLUMNS] + [seen_at, existing['id']])
+                [values[c] for c in columns] + [seen_at, existing['id']])
             # A state the user chose by hand survives every rescan.
             if existing['state'] not in STICKY_STATES:
                 self.conn.execute("UPDATE discovered_jobs SET state='SEEN' WHERE id=? AND state<>'SEEN'",
@@ -164,6 +190,44 @@ class JobRepository:
             'INSERT INTO discovered_jobs ({0}) VALUES ({1})'.format(
                 ','.join(columns), ','.join('?' for _ in columns)), params)
         return (cursor.lastrowid, True)
+
+    def _is_richer(self, incoming, job_id):
+        """Does the incoming text say more than what is already stored?"""
+        row = self.conn.execute('SELECT description FROM discovered_jobs WHERE id=?',
+                                (job_id,)).fetchone()
+        stored = str((row[0] if row else '') or '').strip()
+        return len(str(incoming or '').strip()) >= len(stored)
+
+    def _rescored_on_stored_text(self, job, values, job_id):
+        """Re-score the incoming job against the description that is kept.
+
+        Without this the row would hold one job's description and another
+        job's score, which is the sort of quiet inconsistency that makes a
+        ranking impossible to explain.
+        """
+        from .scoring import MatchScorer
+
+        row = self.conn.execute(
+            'SELECT description, excerpt, enrichment_source FROM discovered_jobs WHERE id=?',
+            (job_id,)).fetchone()
+        if row is None:
+            return values
+        merged = dict(job)
+        merged['description'] = row[0]
+        merged['excerpt'] = row[1]
+        scored = MatchScorer().score(merged, load_profile(self.conn))
+        values = dict(values)
+        values.update({
+            'match_score': scored['score'],
+            'match_label': scored['label'],
+            'match_reasons': json.dumps(scored['reasons'], ensure_ascii=False),
+            'matched_terms': json.dumps(scored['terms'], ensure_ascii=False),
+            'match_breakdown': json.dumps(scored['breakdown'], ensure_ascii=False),
+            'match_concerns': json.dumps(scored['concerns'], ensure_ascii=False),
+        })
+        values.update(fit.score_columns(scored, merged))
+        values['needs_details'] = 1 if values['enrichment_state'] == 'NEEDS_ENRICHMENT' else 0
+        return values
 
     def set_state(self, job_id, state, application_id=None):
         if state not in JOB_STATES:
@@ -178,13 +242,45 @@ class JobRepository:
                 'WHERE id=?', (state, now_iso(), application_id, job_id))
         return cursor.rowcount > 0
 
-    def expire_missing(self, source_names, seen_ids):
-        """Retire stored jobs that this scan no longer matched.
+    def retire_filtered(self, source_keys, reason=FILTERED_OUT):
+        """Retire jobs this scan *saw* and deliberately rejected.
 
-        Without this, a job found under looser filters would stay visible
-        forever and tightening a filter would appear to have no effect.  Only
-        sources that answered successfully are touched, and a state the user
-        chose by hand (SAVED / IGNORED / APPLIED) is never overwritten.
+        This is the confirmed case and it needs no waiting period: the source
+        delivered the posting, the hard filter looked at it and said no.  That
+        is what makes tightening a filter take effect immediately, and it is a
+        different fact from "the source did not mention it", which is handled
+        by :meth:`expire_missing`.
+
+        A state the user chose by hand is never overwritten, and a job is
+        never retired for its *score* - only a filter decision reaches here.
+        """
+        keys = [k for k in (source_keys or []) if k]
+        if not keys:
+            return 0
+        placeholders = ','.join('?' for _ in keys)
+        cursor = self.conn.execute(
+            "UPDATE discovered_jobs SET state='EXPIRED', state_changed_at=?, is_new=0, "
+            'lifecycle_reason=? WHERE source_key IN ({0}) AND state NOT IN {1}'.format(
+                placeholders, str(STICKY_STATES)),
+            [now_iso(), reason] + keys)
+        return cursor.rowcount
+
+    def expire_missing(self, source_names, seen_ids, reason=GONE_FROM_SOURCE):
+        """Retire jobs a healthy source has now failed to return twice.
+
+        ``source_names`` must contain *only* sources whose fetch was a
+        successful, authoritative reconciliation.  A source that was rate
+        limited, timed out, answered 500, failed to parse or returned a
+        suspiciously empty list is not in that list and therefore cannot
+        retire anything: an absent answer is not evidence that a job is gone.
+
+        Even a healthy source only counts as one witness.  Boards paginate,
+        drop a posting for an hour and put it back, so a job has to be missing
+        from ``EXPIRE_AFTER_MISSES`` consecutive clean scans before it is
+        retired.  Seeing it again resets the counter.
+
+        A state the user chose by hand (SAVED / IGNORED / APPLIED) is never
+        overwritten, and no score is ever consulted.
         """
         if not source_names:
             return 0
@@ -194,11 +290,22 @@ class JobRepository:
         if seen_ids:
             id_clause = ' AND id NOT IN ({0})'.format(','.join('?' for _ in seen_ids))
             params.extend(seen_ids)
+        scope = 'source IN ({0}){1}'.format(source_placeholders, id_clause)
+
+        # Anything this scan did return is present again: forget the misses.
+        if seen_ids:
+            self.conn.execute(
+                'UPDATE discovered_jobs SET missing_scans=0 WHERE id IN ({0}) '
+                'AND missing_scans<>0'.format(','.join('?' for _ in seen_ids)), seen_ids)
+        self.conn.execute(
+            'UPDATE discovered_jobs SET missing_scans=missing_scans+1 '
+            "WHERE {0} AND state NOT IN {1} AND state<>'EXPIRED'".format(
+                scope, str(STICKY_STATES)), params)
         cursor = self.conn.execute(
-            "UPDATE discovered_jobs SET state='EXPIRED', state_changed_at=?, is_new=0 "
-            'WHERE source IN ({0}){1} AND state NOT IN {2}'.format(
-                source_placeholders, id_clause, str(STICKY_STATES)),
-            [now_iso()] + params)
+            "UPDATE discovered_jobs SET state='EXPIRED', state_changed_at=?, is_new=0, "
+            'lifecycle_reason=? WHERE {0} AND state NOT IN {1} AND missing_scans>=?'.format(
+                scope, str(STICKY_STATES)),
+            [now_iso(), reason] + params + [EXPIRE_AFTER_MISSES])
         return cursor.rowcount
 
     def release_orphaned_applications(self):

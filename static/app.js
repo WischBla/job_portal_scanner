@@ -4,7 +4,10 @@
 'use strict';
 
 const state = { view: 'jobs', jobs: [], counts: {}, config: null, profile: null,
-  feedbackReasons: [], listMode: 'active', lastScan: null };
+  feedbackReasons: [], listMode: 'active', lastScan: null,
+  /* 'all' is the default view and it means every active job, whatever it
+     scored. A filter has never been allowed to be a lifecycle. */
+  filter: 'all', filterOptions: null };
 
 /* Why a job was a yes or a no. Recorded for later calibration; nothing retrains. */
 const FEEDBACK_REASONS_NEGATIVE = ['Too stakeholder-heavy', 'Too political / external',
@@ -262,6 +265,7 @@ function adjustCounts(job, delta) {
   if (job.state === 'SAVED') bump('saved', delta);
   if (job.classification === 'Exceptional') bump('excellent', delta);
   else if (job.classification === 'Strong') bump('strong', delta);
+  if (job.enrichment_state === 'NEEDS_ENRICHMENT') bump('needs_enrichment', delta);
 }
 
 function compBlock(comp) {
@@ -297,7 +301,15 @@ function fitBlock(job) {
       humanClass(style.classification) + (style.detail ? ' - ' + style.detail : '')),
     line('Career direction', signed(career.adjustment),
       humanClass(career.classification) + (career.detail ? ' - ' + career.detail : '')),
-    line('Personal fit score', String(job.score), job.band || ''),
+    line('Personal fit score', job.provisional ? 'provisional (' + job.score + ')' : String(job.score),
+      job.provisional ? 'not enough evidence to judge this yet' : (job.band || '')),
+    line('Confidence', String(job.confidence || 'LOW'), job.evidence_detail || ''),
+    /* Only ever claimed when there is a description to have come from
+       somewhere. A failed attempt leaves its note, not a provenance. */
+    job.enrichment_source && job.has_description
+      ? line('Description from', String(job.enrichment_source).replace(/_/g, ' '),
+          job.enrichment_detail || '')
+      : null,
   ]);
 }
 
@@ -312,12 +324,16 @@ function jobCard(job) {
   if (job.age) meta.push(job.age);
 
   const head = el('div', { class: 'card-head' }, [
-    el('div', { class: 'score ' + cls, title: 'Personal fit ' + job.score
-        + ' = base ' + job.base_score + ' ' + signed(job.operating_style.adjustment)
-        + ' operating style ' + signed(job.career_direction.adjustment)
-        + ' career direction' }, [
+    el('div', { class: 'score ' + cls + (job.provisional ? ' provisional' : ''),
+      title: job.provisional
+        ? 'Provisional: ' + job.score + ' from the title, company and location alone. '
+          + 'No description has been found for this job yet.'
+        : 'Personal fit ' + job.score
+          + ' = base ' + job.base_score + ' ' + signed(job.operating_style.adjustment)
+          + ' operating style ' + signed(job.career_direction.adjustment)
+          + ' career direction' }, [
       el('div', { class: 'value', text: String(job.score) }),
-      el('div', { class: 'class', text: job.classification }),
+      el('div', { class: 'class', text: job.provisional ? 'provisional' : job.classification }),
       job.base_score !== job.score
         ? el('div', { class: 'base', text: 'base ' + job.base_score })
         : null,
@@ -328,19 +344,36 @@ function jobCard(job) {
         job.is_new ? el('span', { class: 'badge new', text: 'new' }) : null,
         job.state === 'SAVED' ? el('span', { class: 'badge', text: 'saved' }) : null,
         job.state === 'APPLIED' ? el('span', { class: 'badge', text: 'applied' }) : null,
-        job.needs_details ? el('span', { class: 'badge warn', text: 'needs details' }) : null,
+        job.high_potential
+          ? el('span', { class: 'badge warn', text: 'high potential' }) : null,
+        job.needs_details ? el('span', { class: 'badge warn', text: 'needs enrichment' }) : null,
       ]),
       el('div', { class: 'card-meta', html: meta.filter(Boolean).map(escapeHtml).join('<span class="sep">/</span>') }),
+      /* How much the number above is worth. Shown on every card, not only
+         on the incomplete ones: "78, confidence HIGH" and "78, provisional"
+         are different claims and the difference has to be visible. */
+      el('div', { class: 'evidence' }, [
+        el('span', { class: 'conf conf-' + String(job.confidence || 'LOW').toLowerCase(),
+          text: 'Evidence: ' + (job.evidence || 'LOW') }),
+        job.evidence_detail ? el('span', { class: 'muted', text: job.evidence_detail }) : null,
+      ]),
     ]),
   ]);
 
   /* An alert gave us a title, a company and a link - and no description. The
-     score is shown, but the card says plainly what it was computed from. */
+     card says plainly what the score was computed from, and offers the two
+     ways to fix it. It is never hidden: a job nobody can judge yet is not a
+     job anybody has judged badly. */
   const incomplete = job.needs_details
     ? el('div', { class: 'needs-details' }, [
-      el('span', { text: 'Needs job description - the fit score is based on the title alone.' }),
+      el('span', { text: job.high_potential
+        ? 'Leadership scope in the title, but no description yet - worth enriching before judging.'
+        : 'Needs a job description - the fit score is provisional until one is found.' }),
+      el('button', { class: 'small', text: 'Enrich', onclick: (event) => enrichJob(job, event.target) }),
       el('button', { class: 'small', text: 'Add description',
         onclick: () => addDescriptionDialog(job) }),
+      job.enrichment_detail
+        ? el('span', { class: 'muted', text: job.enrichment_detail }) : null,
     ])
     : null;
 
@@ -369,6 +402,7 @@ function jobCard(job) {
         job.seniority ? 'Seniority: <b>' + escapeHtml(job.seniority) + '</b>' : '',
         job.source ? 'Source: <b>' + escapeHtml(job.source) + '</b>' : '',
         job.discovered_via === 'linkedin' ? 'Discovered via: <b>LinkedIn alert</b>' : '',
+        'Enrichment: <b>' + escapeHtml(String(job.enrichment_state || '').replace(/_/g, ' ')) + '</b>',
         job.office_days ? 'Office days: <b>' + job.office_days + '</b>' : '',
       ].filter(Boolean).join('<br>') }),
     ]),
@@ -399,6 +433,11 @@ function jobCard(job) {
       text: job.state === 'SAVED' ? 'Unsave' : 'Save' }),
     el('button', { class: 'small primary', onclick: () => applyToJob(job), text: 'Apply' }),
     el('button', { class: 'small', onclick: () => showAnalysis(job), text: 'Analysis' }),
+    job.needs_details
+      ? null
+      : el('button', { class: 'small ghost', text: 'Re-enrich',
+        onclick: (event) => enrichJob(job, event.target), title:
+          'Look for the canonical description again' }),
     el('span', { class: 'spacer' }),
     el('button', { class: 'small ghost', onclick: () => addToApplications(job), text: 'Track application' }),
     job.state === 'IGNORED'
@@ -455,16 +494,52 @@ function renderJobs() {
 }
 
 /* A full reload of the list. Used when the data really did change wholesale
-   (a scan, an import); it still keeps the viewport where it was. */
+   (a scan, an import); it still keeps the viewport where it was.
+
+   The default really is "all active": no score threshold is applied here or
+   on the server, so a Low Priority job and a job nothing is known about are
+   both in the list the user sees first. */
 async function loadJobs(anchorJobId) {
   const ignored = state.listMode === 'ignored';
-  const data = await api('/api/jobs' + (ignored ? '?state=IGNORED' : ''));
+  const view = state.filter || 'all';
+  const query = ignored ? '?state=IGNORED' : (view === 'all' ? '' : '?filter=' + view);
+  const data = await api('/api/jobs' + query);
   state.jobs = data.jobs;
   state.counts = data.counts;
+  state.filterOptions = data.filters || state.filterOptions;
   state.lastScan = data.last_scan;
   keepingPosition(anchorJobId === undefined ? null : anchorJobId, renderJobs);
   renderSummary();
+  renderFilters();
   renderIgnoredToggle();
+}
+
+/* The filter chips. Same screen, narrowed - deliberately not a new tab and
+   deliberately not a lifecycle: picking "Low priority" changes what is
+   listed and nothing about the jobs themselves. */
+function renderFilters() {
+  const wrap = $('#job-filters');
+  if (!wrap) return;
+  clear(wrap);
+  if (state.listMode === 'ignored') return;      // the Ignored list has its own toggle
+  const counts = (state.counts || {}).filters || {};
+  (state.filterOptions || DEFAULT_FILTERS).forEach((entry) => {
+    if (entry.key === 'ignored') return;         // reachable through its own button
+    const count = counts[entry.key];
+    wrap.appendChild(el('button', {
+      class: 'chip' + ((state.filter || 'all') === entry.key ? ' on' : ''),
+      text: entry.label + (count === undefined ? '' : ' (' + count + ')'),
+      onclick: () => selectFilter(entry.key),
+    }));
+  });
+}
+
+async function selectFilter(key) {
+  if (state.filter === key) return;
+  state.filter = key;
+  state.listMode = 'active';
+  window.scrollTo(0, 0);
+  try { await loadJobs(); } catch (err) { toast(err.message, true); }
 }
 
 function renderSummary() {
@@ -474,12 +549,24 @@ function renderSummary() {
       + ' ignored  ·  Restore puts a job back into the list';
     return;
   }
-  const parts = [counts.total + ' opportunities', counts.excellent + ' exceptional fit',
+  const parts = [counts.total + ' active', counts.excellent + ' exceptional fit',
     counts.strong + ' strong fit', counts.saved + ' saved'];
+  if (counts.needs_enrichment) parts.push(counts.needs_enrichment + ' need enrichment');
   const scan = state.lastScan;
   if (scan && scan.finished_at) parts.push('last scan ' + scan.finished_at.replace('T', ' ').replace('Z', ''));
   $('#job-summary').textContent = parts.join('  ·  ');
 }
+
+/* The chips the screen falls back to before the first response arrives. */
+const DEFAULT_FILTERS = [
+  { key: 'all', label: 'All active' },
+  { key: 'top', label: 'Exceptional / Strong' },
+  { key: 'review', label: 'Worth reviewing' },
+  { key: 'edge', label: 'Edge' },
+  { key: 'low', label: 'Low priority' },
+  { key: 'enrich', label: 'Needs enrichment' },
+  { key: 'saved', label: 'Saved' },
+];
 
 /* Ignored jobs stay reachable: the same screen, filtered. Not a new view. */
 function renderIgnoredToggle() {
@@ -494,6 +581,29 @@ async function toggleIgnored() {
   state.listMode = state.listMode === 'ignored' ? 'active' : 'ignored';
   window.scrollTo(0, 0);          // a different list: start at its top
   try { await loadJobs(); } catch (err) { toast(err.message, true); }
+}
+
+/* Go and look for this job's real description, once. Local duplicates, then
+   the employer's own board, then the public original posting - never
+   LinkedIn. A failure changes nothing: the card is put back as it was with an
+   honest line saying nothing was found. */
+async function enrichJob(job, button) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/jobs/' + job.id + '/enrich', { method: 'POST' });
+    if (result.counts) state.counts = result.counts;
+    Object.assign(job, result.card || {});
+    replaceCard(job);
+    renderSummary();
+    renderFilters();
+    if (result.status === 'ENRICHED') toast('Description found: ' + result.detail);
+    else if (result.status === 'UNCHANGED') toast('This job already has a description.');
+    else toast('No canonical description found - the job is unchanged.', true);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 /* Save / Unsave: one card is replaced where it stands. */
@@ -668,7 +778,8 @@ function renderAlertPreview(wrap, data) {
   clear(wrap);
   wrap.appendChild(el('h3', { text: data.found + ' jobs found' }));
   wrap.appendChild(el('div', { class: 'muted',
-    text: data.new + ' new  ·  ' + data.known + ' already known' }));
+    text: data.new + ' new  ·  ' + data.known + ' already known'
+      + (data.needs_enrichment ? '  ·  ' + data.needs_enrichment + ' need enrichment' : '') }));
 
   const boxes = [];
   data.jobs.forEach((job, index) => {
@@ -685,6 +796,14 @@ function renderAlertPreview(wrap, data) {
           el('span', { class: 'badge' + (job.status === 'NEW' ? ' new' : ''), text: job.status }),
           job.match_reason ? el('span', { text: ' ' + job.match_reason }) : null,
         ]),
+        /* What this entry is actually worth: a row the database already has
+           with a full description is useful now, a bare alert entry is a
+           title and a link and says so. */
+        el('div', { class: 'muted' }, [
+          el('span', { class: 'conf conf-' + String(job.evidence || 'LOW').toLowerCase(),
+            text: 'Evidence: ' + (job.evidence || 'LOW') }),
+          el('span', { text: ' ' + (job.enrichment_note || '') }),
+        ]),
       ]),
     ]));
   });
@@ -700,7 +819,11 @@ function renderAlertPreview(wrap, data) {
         closeDialog();
         state.listMode = 'active';
         await loadJobs();
-        toast(outcome.imported + ' imported, ' + outcome.linked + ' already known');
+        /* One import, one enrichment attempt - the toast reports what that
+           attempt actually achieved rather than implying it always works. */
+        const enriched = (outcome.enrichment || {}).enriched || 0;
+        toast(outcome.imported + ' imported, ' + outcome.linked + ' already known'
+          + (outcome.imported ? ', ' + enriched + ' enriched automatically' : ''));
       } catch (err) {
         event.target.disabled = false;
         toast(err.message, true);
@@ -1272,10 +1395,27 @@ async function loadConfig() {
   // A broken integration is never silent: every failure is listed by name.
   const failureRows = health.failures.map((f) => el('tr', {}, [
     el('td', { text: f.company || f.source }),
-    el('td', { text: f.status === 'ERROR' ? 'Source error' : 'No postings returned' }),
+    el('td', { text: f.outcome ? f.outcome.replace(/_/g, ' ').toLowerCase()
+      : (f.status === 'ERROR' ? 'source error' : 'no postings returned') }),
     el('td', { class: 'muted', text: f.error || '-' }),
     el('td', { class: 'muted', text: f.last_success_at
       ? 'Last successful scan: ' + shortStamp(f.last_success_at) : 'Never scanned successfully' }),
+  ]));
+
+  /* Per-source diagnostics. The point of the table is the last column: a
+     source that did not answer authoritatively took no part in retiring any
+     job, and the user can see which ones those were. Nothing here can contain
+     a token - the adapters send none and only public rate-limit headers are
+     ever read. */
+  const diagnosticRows = (health.diagnostics || []).map((d) => el('tr', {}, [
+    el('td', { text: d.company || d.source }),
+    el('td', { class: 'muted', text: shortStamp(d.last_attempt_at) || 'never' }),
+    el('td', { class: 'muted', text: shortStamp(d.last_success_at) || 'never' }),
+    el('td', { text: (d.outcome || d.status || '-').replace(/_/g, ' ').toLowerCase() }),
+    el('td', { text: d.http_status ? String(d.http_status) : '-' }),
+    el('td', { text: d.jobs_returned ? String(d.jobs_returned) : '0' }),
+    el('td', { text: d.retries ? String(d.retries) : '0' }),
+    el('td', { class: 'muted', text: d.error || '-' }),
   ]));
 
   const sourceRows = data.sources.map((source) => el('tr', {}, [
@@ -1309,6 +1449,15 @@ async function loadConfig() {
     ]),
     failureRows.length ? el('h3', { text: 'Failures' }) : null,
     failureRows.length ? el('table', {}, [el('tbody', {}, failureRows)]) : null,
+    diagnosticRows.length ? el('h3', { text: 'Request diagnostics' }) : null,
+    diagnosticRows.length ? el('div', { class: 'muted',
+      text: 'Only a source whose last attempt was an authoritative success takes part in '
+        + 'retiring jobs. A rate-limited, timed-out or erroring source leaves its jobs alone.' }) : null,
+    diagnosticRows.length ? el('table', {}, [
+      el('thead', {}, [el('tr', {}, ['Source', 'Last attempt', 'Last success', 'Status',
+        'HTTP', 'Jobs', 'Retries', 'Last error'].map((h) => el('th', { text: h })))]),
+      el('tbody', {}, diagnosticRows),
+    ]) : null,
     el('h3', { text: 'Configured sources' }),
     el('table', {}, [
       el('thead', {}, [el('tr', {}, ['Name', 'Type', 'Enabled', 'Last scan', 'Jobs', 'Config', '']
@@ -1449,8 +1598,9 @@ async function loadConfig() {
       + 'HR or helpdesk roles. Stage 2 scores what survives. Everything on this screen edits '
       + 'the one profile the scanner reads - there is no second copy.' }),
     el('div', { class: 'grid3' }, [
-      field('Minimum match score', input('minimum_match_score', matching.minimum_match_score, 'number'),
-        'Jobs below this are kept in the database and explained, but not listed.'),
+      field('Target score line', input('minimum_match_score', matching.minimum_match_score, 'number'),
+        'A marker, not a gate. Every active Swiss job is listed whatever it scores - this '
+        + 'only decides what counts as "relevant" in the numbers.'),
       field('Country mode', selectBox('country_mode', matching.country_mode, ['strict', 'preferred', 'off']),
         'Strict: a posting must be explicitly Swiss-eligible.'),
       field('Preferred-location mode', selectBox('location_filter_mode', matching.location_filter_mode,
