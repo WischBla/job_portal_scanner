@@ -72,6 +72,28 @@ class ScanCoverageTests(unittest.TestCase):
         self.assertEqual(result['duplicate_count'], 1)
         self.assertEqual(len(self.jobs()), 1)
 
+    def test_the_richer_copy_of_a_duplicate_is_the_one_that_is_kept(self):
+        """An aggregator stub must not displace the company's full advert.
+
+        Whichever fetch finished first used to win, so a job with a perfectly
+        good description could end up stored as an evidence-LOW stub and be
+        marked as needing enrichment it did not need.
+        """
+        url = 'https://example.test/jobs/head-of-platform'
+        self.scan({
+            AGGREGATOR: [raw(AGGREGATOR, 'arbeitnow', 'an-1',
+                             'Head of Platform Engineering', 'Example AG',
+                             'Zurich, Switzerland', url + '?utm_source=feed',
+                             description='')],
+            COMPANY_SOURCE: [raw(COMPANY_SOURCE, 'greenhouse', 'gh-1',
+                                 'Head of Platform Engineering', 'Example AG',
+                                 'Zurich, Switzerland', url)],
+        })
+        jobs = self.jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['description'], STRONG_DESCRIPTION)
+        self.assertNotEqual(jobs[0]['enrichment_state'], 'NEEDS_ENRICHMENT')
+
     def test_the_same_role_under_two_urls_collapses_across_sources(self):
         """The aggregator and the company board rarely share a URL."""
         result = self.scan({

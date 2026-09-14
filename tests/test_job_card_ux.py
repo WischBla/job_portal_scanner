@@ -172,9 +172,21 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_ignored_jobs_are_reachable_without_a_new_navigation_item(self):
         self.assertIn('id="ignored-btn"', self.html)
-        self.assertIn("api('/api/jobs' + (ignored ? '?state=IGNORED' : ''))", self.js)
+        self.assertIn("'?state=IGNORED'", self.js)
         self.assertIn("text: 'Restore'", self.js)
         self.assertEqual(self.html.count('class="tab"'), 4)
+
+    def test_the_band_filters_are_not_a_new_navigation_item_either(self):
+        """Eight views of one screen, still four tabs."""
+        self.assertIn('id="job-filters"', self.html)
+        self.assertEqual(self.html.count('class="tab"'), 4)
+        for key in ("'all'", "'top'", "'review'", "'edge'", "'low'", "'enrich'", "'saved'"):
+            self.assertIn(key, self.js)
+
+    def test_all_active_is_the_default_view(self):
+        """No score threshold stands between a scan and the list."""
+        self.assertIn("filter: 'all'", self.js)
+        self.assertIn("view === 'all' ? '' : '?filter=' + view", self.js)
 
 
 class JobActionApiTests(unittest.TestCase):

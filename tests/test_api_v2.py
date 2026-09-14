@@ -330,9 +330,17 @@ class ShellTests(ApiTestCase):
             self.assertIn(label, response.text)
 
     def test_the_jobs_screen_has_no_search_or_filter_form(self):
+        """Still no form, and still nothing to type into.
+
+        The band filters added with the evidence model are chips the script
+        renders - one click, one view - not a query the user has to compose.
+        The invariant being protected is that the Jobs screen never asks the
+        user to fill something in before it will show them their jobs.
+        """
         html = self.client.get('/').text
         self.assertNotIn('<form', html)
-        self.assertNotIn('Filter', html)
+        self.assertNotIn('<input', html)
+        self.assertNotIn('<select', html)
 
 
 if __name__ == '__main__':

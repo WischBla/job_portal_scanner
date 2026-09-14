@@ -16,16 +16,25 @@ too.  No second card is ever created.
 
 **An alert entry is not a job description.**  A title, a company and a link are
 not enough for a trustworthy Personal Fit Score, so a genuinely new entry is
-stored, scored by the normal scorer and flagged ``NEEDS_DETAILS``.  Nothing is
-invented; the user pastes the real description later and the job is re-scored
-by exactly the same pipeline.
+stored, scored by the normal scorer and flagged ``NEEDS_ENRICHMENT``.  Its
+score is marked provisional and neither personal-fit adjustment is allowed to
+fire, because four words are not evidence that a role is a poor fit - they are
+an absence of evidence.
+
+**An import is followed by exactly one enrichment attempt.**  Once the user has
+confirmed which entries to import, :mod:`jobscanner.enrichment` looks for the
+canonical description of each new job: in the local database first, then on the
+employer's own configured job board, then on the public original posting.  One
+import, one attempt, no daemon, no repeated crawling - and never LinkedIn
+itself.  What it cannot find stays honestly marked as needing enrichment.
 
 The hard filter is deliberately not applied to an import.  It exists to stop a
 *source* from flooding the list with jobs nobody asked for; here the user has
 looked at every entry in the preview and ticked it themselves.
 """
 
-from . import linkedin_alert
+from . import enrichment, linkedin_alert
+from . import evidence as evidence_mod
 from .db import connect, load_profile, now_iso, row_to_dict, utc_now_iso
 from .locations import fold
 from .normalizer import JobNormalizer, canonical_url
@@ -199,13 +208,24 @@ def preview(entries, conn=None):
             item['match_reason'] = MATCH_LABELS.get(reason, '') if existing else ''
             item['existing_job_id'] = existing['id'] if existing else None
             item['existing_source'] = (existing.get('source') or '') if existing else ''
-            item['needs_details'] = not (existing and (existing.get('description') or '').strip())
+            # What this entry is actually worth right now.  A row the database
+            # already holds with a full description is immediately useful; a
+            # genuinely new alert entry is a title and a link, and the dialog
+            # says so rather than implying the two are the same find.
+            report = evidence_mod.assess(existing if existing else
+                                         {'title': entry['title'], 'description': ''})
+            item['evidence'] = report['level']
+            item['enrichment_state'] = report['state']
+            item['high_potential'] = report['high_potential']
+            item['needs_details'] = report['state'] == evidence_mod.NEEDS_ENRICHMENT
+            item['enrichment_note'] = _preview_note(existing, report)
             out.append(item)
         return {
             'source': LINKEDIN_VIA,
             'found': len(out),
             'new': sum(1 for item in out if item['status'] == NEW),
             'known': sum(1 for item in out if item['status'] == KNOWN),
+            'needs_enrichment': sum(1 for item in out if item['needs_details']),
             'jobs': out,
         }
     finally:
@@ -213,15 +233,30 @@ def preview(entries, conn=None):
             conn.close()
 
 
+def _preview_note(existing, report):
+    """One line saying what this entry gives you, for the import dialog."""
+    if existing and report['state'] != evidence_mod.NEEDS_ENRICHMENT:
+        return 'Matched a job already in your database - full description available'
+    if existing:
+        return 'Already known, but still without a description'
+    if report['high_potential']:
+        return 'Leadership scope in the title - enrichment will be attempted first'
+    return 'Needs enrichment - the alert carries no description'
+
+
 # --------------------------------------------------------------------------
 # Import
 # --------------------------------------------------------------------------
-def import_entries(entries, conn=None):
-    """Store the entries the user ticked.
+def import_entries(entries, conn=None, enrich=True, session=None):
+    """Store the entries the user ticked, then try once to enrich them.
 
-    Returns ``{'imported': n, 'linked': n, 'needs_details': n, 'job_ids': [...]}``.
-    ``linked`` counts entries that turned out to be a job the database already
-    had: those update provenance only.
+    Returns ``{'imported': n, 'linked': n, 'needs_details': n, 'job_ids': [...],
+    'enrichment': {...}}``.  ``linked`` counts entries that turned out to be a
+    job the database already had: those update provenance only.
+
+    ``enrich`` is what the automatic post-import pass rides on, and ``session``
+    lets a caller inject its own source access - which is how the tests
+    exercise the whole path without a network.
     """
     owns = conn is None
     conn = conn or connect()
@@ -230,7 +265,8 @@ def import_entries(entries, conn=None):
         scorer = MatchScorer()
         repo = JobRepository(conn)
         rows = _candidates(conn)
-        result = {'imported': 0, 'linked': 0, 'needs_details': 0, 'job_ids': [], 'skipped': 0}
+        result = {'imported': 0, 'linked': 0, 'needs_details': 0, 'job_ids': [],
+                  'imported_ids': [], 'skipped': 0, 'enrichment': None}
         seen = set()
 
         for raw in entries:
@@ -249,7 +285,16 @@ def import_entries(entries, conn=None):
             result['imported'] += 1
             result['needs_details'] += 1
             result['job_ids'].append(job_id)
+            result['imported_ids'].append(job_id)
             rows = _candidates(conn)      # so two identical entries collapse
+        conn.commit()
+
+        # One import, one enrichment attempt.  Only the genuinely new rows are
+        # tried: a job the database already had is authoritative as it stands.
+        if enrich and result['imported_ids']:
+            result['enrichment'] = enrichment.enrich_jobs(
+                result['imported_ids'], conn, session=session)
+            result['needs_details'] -= result['enrichment']['enriched']
         conn.commit()
         return result
     finally:
@@ -323,8 +368,11 @@ def add_description(job_id, description, conn=None):
             return None
         job = row_to_dict(row)
         conn.execute('UPDATE discovered_jobs SET description=?, excerpt=?, needs_details=0, '
+                     'enrichment_source=?, enrichment_detail=?, enrichment_at=?, '
                      'state_changed_at=? WHERE id=?',
-                     (text, text[:800], now_iso(), job_id))
+                     (text, text[:800], enrichment.FROM_MANUAL,
+                      enrichment.SOURCE_LABELS[enrichment.FROM_MANUAL], now_iso(),
+                      now_iso(), job_id))
         job['description'] = text
         job['excerpt'] = text[:800]
         rescore_job(conn, job, load_profile(conn))

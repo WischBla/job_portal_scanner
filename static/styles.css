@@ -48,6 +48,17 @@ main { padding: 24px 20px 80px; }
 .view.active { display: block; }
 
 .action-row { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+
+/* Filter chips: the same Jobs screen, narrowed. Deliberately quieter than the
+   tabs, because they select a view and never a place. */
+.filters { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.filters .chip {
+  padding: 4px 10px; font-size: 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: none; color: var(--text-soft); cursor: pointer;
+}
+.filters .chip:hover { border-color: var(--line-strong); color: var(--text); }
+.filters .chip.on { border-color: var(--accent); color: var(--accent); }
+
 .summary { color: var(--text-soft); font-size: 13px; margin-bottom: 18px; }
 .muted { color: var(--text-faint); font-size: 13px; }
 .list { display: flex; flex-direction: column; gap: 12px; }
@@ -88,6 +99,20 @@ button.small { padding: 3px 8px; font-size: 13px; }
 .score.exceptional .class { color: var(--accent); }
 .score.strong .value { color: var(--text); }
 .score.edge .value, .score.low-priority .value { color: var(--text-faint); }
+/* A provisional score is a number nobody should act on yet, and it should not
+   look like one that has been earned. */
+.score.provisional .value { color: var(--text-faint); opacity: .75; }
+.score.provisional .class { color: var(--warn); }
+
+/* How much the score is worth, on every card. */
+.evidence { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-top: 4px; }
+.evidence .conf, .conf {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-faint);
+}
+.conf-high { color: var(--accent); }
+.conf-medium { color: var(--text-soft); }
+.conf-low { color: var(--warn); }
 
 /* The four numbers of the personal-fit model, base score included. */
 .fit { display: flex; flex-direction: column; gap: 4px; }

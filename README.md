@@ -38,15 +38,35 @@ which then tells you what to install.
 
 ### Jobs (default)
 
-One button: **Scan for new jobs**. Below it, every relevant opportunity sorted by
-match score, then by recency. Each card shows:
+One button: **Scan for new jobs**. Below it, **every active Swiss-eligible
+opportunity**, sorted by Personal Fit Score and then by recency.
 
-* the score and its classification - **Excellent** (80+), **Strong** (70+), **Review**
+All of them. There is no score threshold on this screen and no minimum-score
+cut in the scan: the Personal Fit Score decides the *order* and the
+recommendation band, never whether a job exists. A Low Priority job is ranked
+last and labelled honestly; a job the scanner knows too little about is
+labelled *provisional* and is the last thing that should disappear.
+
+A row of filter chips narrows the same list - **All active** (the default),
+Exceptional / Strong, Worth reviewing, Edge, Low priority, **Needs
+enrichment**, Saved, and the Ignored button. They are views, not lifecycle: no
+chip changes a job's state, its score or its persistence.
+
+Each card shows:
+
+* the score and its band - **Exceptional** (85+), **Strong** (75+), **Worth
+  reviewing** (65+), **Edge** (55+), **Low priority** - or `provisional` when
+  there is not enough evidence to stand behind a number
+* **Evidence: HIGH / MEDIUM / LOW** and one sentence saying how that was decided
 * title, company, location, work model, posting age
 * **Why it matches** - at most 5 reasons
 * **Potential concerns** - at most 3
 * **Estimated compensation** - a CHF range with base / bonus / equity and a confidence
-* actions: Open job, Save, Apply, Analysis, Track application, Ignore
+* actions: Open job, Save, Apply, Analysis, **Enrich**, Track application, Ignore
+
+A LOW-evidence card says so plainly and offers **Enrich** (go and look for the
+canonical description) and **Add description** (paste it yourself). It is never
+hidden. See [Evidence and enrichment](#evidence-and-enrichment).
 
 A card action never moves the page. The card being worked on keeps its exact
 pixel position, the list is not rebuilt and a verdict never re-sorts the
@@ -59,7 +79,8 @@ in the state it had (a saved job comes back saved). Ignored jobs are never
 lost either - the **Ignored (n)** button next to *Scan* switches the same list
 to what was ignored, where every card offers **Restore**.
 
-No search box, no filters, no source configuration. All of that lives in Config.
+No search box and no source configuration - that lives in Config. The filter
+chips are one click each; nothing has to be typed to see your jobs.
 
 The second button, **Import LinkedIn Alert**, is described below.
 
@@ -150,13 +171,25 @@ application URL, its description and its score, and only records
 scan had retired comes back as SEEN, because the alert is evidence that the
 posting is open again.
 
-**NEEDS_DETAILS.** An alert carries a title, a company and a link - not a job
+**NEEDS_ENRICHMENT.** An alert carries a title, a company and a link - not a job
 description, and that is not enough for a trustworthy Personal Fit Score. A
-genuinely new entry is stored, scored and flagged **needs details**, with an
-**Add description** action. Nothing is invented. Once the real description is
-pasted, the job is re-scored by exactly the same pipeline every other job uses:
-base match score + Operating Style Adjustment + Career Direction Adjustment.
-There is no LinkedIn-specific scoring and no bonus or penalty for the channel.
+genuinely new entry is stored, flagged **needs enrichment**, and its score is
+marked *provisional*: neither personal-fit adjustment is allowed to fire,
+because four words are not evidence that a role is a poor fit. The import
+preview says which entries are immediately useful and which are not:
+
+    Head of SRE — Company X — Zürich
+    NEW · Evidence: LOW · Needs enrichment - the alert carries no description
+
+    Site Reliability Engineer — Proton
+    ALREADY KNOWN · Matched canonical Greenhouse job · full description available
+
+**One import, one enrichment attempt.** After the user confirms the selection,
+each new job is looked up once through the enrichment pipeline below. What it
+finds is re-scored by exactly the same pipeline every other job uses: base
+match score + Operating Style Adjustment + Career Direction Adjustment. There
+is no LinkedIn-specific scoring, no bonus or penalty for the channel, no
+background daemon, no repeated crawling - and LinkedIn itself is never fetched.
 
 ### Why a company stays MANUAL
 
@@ -174,20 +207,175 @@ is being scanned.
 
 ### Source health
 
-Config → Job Sources shows coverage per source kind and lists every failure by
-company, with its error and when it last worked. A source that breaks is
-visible; it never just quietly stops contributing. Config → Company Watchlist
-shows the same per company: source, status, jobs from the last scan, last scan.
+Config → Job Sources shows coverage per source kind, lists every failure by
+company with its error and when it last worked, and - under **Request
+diagnostics** - one row per source with what the last attempt actually did:
+
+| Source | Last attempt | Last success | Status | HTTP | Jobs | Retries | Last error |
+
+A source that breaks is visible; it never just quietly stops contributing.
+Config → Company Watchlist shows the same per company.
 
 A scan reports what it did - sources scanned, companies scanned, jobs fetched,
 Swiss eligible, relevant, new, source failures - and one failing source never
 aborts the run.
+
+Nothing in these diagnostics can carry a credential. The adapters send none
+(every endpoint is public and unauthenticated) and only a whitelist of public
+rate-limit headers is read at all.
+
+### Rate limits and failures
+
+Every request any adapter makes goes through one place
+(`jobscanner/sources/base.py`), which is why the handling is uniform:
+
+* **Paced per provider.** Each host has a concurrency ceiling and a minimum
+  interval. SmartRecruiters and Lever - the two whose detail passes can
+  actually reach a documented limit - get two requests in flight and a real
+  gap between them, so a full board is a steady trickle rather than a burst.
+* **Retried properly, or not at all.** 429, 500, 502, 503, 504 and timeouts are
+  transient and get a bounded number of retries with exponential backoff and
+  full jitter. A 404 or a 401 is an answer and is not retried. `Retry-After` is
+  honoured when the server sends one, capped so a bad header cannot stall a
+  scan. The jitter matters as much as the backoff: without it, every source
+  throttled in the same scan would come back in the same millisecond.
+* **Classified, not just failed.** Each source's fetch ends as `SUCCESS`,
+  `RATE_LIMITED`, `TIMEOUT`, `HTTP_ERROR`, `PARSE_ERROR`, `NETWORK_ERROR` or
+  `EMPTY_BUT_SUSPICIOUS` - the last being a board that returned jobs last time,
+  returns none now and offers no error to explain it.
+
+**Only `SUCCESS` may retire a job.** This is the lifecycle rule the whole
+mechanism exists for: a source that could not answer has told us nothing about
+whether its jobs still exist, so its stored jobs are left exactly as they are.
+An absent answer is not evidence.
+
+### Job lifecycle
+
+`EXPIRED` means one thing: **the posting is confirmed to be gone.** It has
+never been allowed to mean any of these, and after this release it cannot:
+
+* a low score, or a poor Personal Fit
+* a missing description or a failed enrichment
+* a source that was temporarily unavailable
+* a job that simply was not returned in one scan
+
+Two facts can retire a job, and they are handled differently because they are
+different:
+
+* **Seen and rejected.** The source delivered the posting and the hard filter
+  looked at it and said no. That is a decision, so it takes effect at once -
+  which is what makes tightening a filter actually remove results.
+* **Confirmed missing.** A healthy, authoritative source stopped returning it.
+  Boards paginate, drop a posting for an hour and put it back, so one absence
+  is not evidence: a job has to be missing from **two consecutive authoritative
+  scans** before it is retired, and seeing it again resets the counter.
+
+A state the user chose by hand - SAVED, IGNORED, APPLIED - is never overwritten
+by any of this. The reason a job was retired is stored alongside its state, so
+the two causes stay distinguishable afterwards.
 
 ### Company priority
 
 Priority A / B / C is a tie-breaker only. Ranking is `match score DESC`, then
 company priority, then posting date. A weak role at a priority-A company never
 outranks a strong one elsewhere.
+
+---
+
+## Evidence and enrichment
+
+Discovery, enrichment, scoring and visibility are four different questions, and
+the scanner used to conflate the second with the third. A LinkedIn alert entry
+for a *Head of SRE* was scored as though its silence were a set of findings, so
+a role nobody had judged came out looking like a role that had been judged
+badly - and then the minimum-score cut removed it.
+
+The rule, stated once and enforced everywhere (`jobscanner/evidence.py`):
+
+> **Missing evidence is not negative evidence.**
+
+### Evidence levels
+
+| Level | Means | Enrichment state |
+|---|---|---|
+| **HIGH** | a full canonical job description | `ENRICHED` |
+| **MEDIUM** | partial but meaningful responsibilities | `PARTIAL` |
+| **LOW** | title / company / location only, or too thin to read | `NEEDS_ENRICHMENT` |
+
+The level is decided from what the posting *says* - how many distinct
+responsibility statements it makes - not only from how long it is. A hundred
+characters of pure responsibilities says more about the shape of a role than a
+thousand characters of company boilerplate. An imported alert's informational
+line is explicitly not a description.
+
+At **LOW** evidence neither adjustment fires at all and the Personal Fit Score
+is shown as `provisional`. At **MEDIUM** they fire but cannot reach the harsh
+end of their band: a thin posting is a thin posting, not a bad job. The
+"concerns" list changes too - "no leadership responsibilities described" is a
+finding about a description, not about a job that has none, so at LOW evidence
+it is replaced by one honest sentence.
+
+### High potential
+
+A LOW-evidence posting whose *title* names a leadership scope in a relevant
+domain (Head of SRE, Head of Platform Engineering, Director Technology
+Operations, Engineering Manager SRE, Principal Technical Program Manager …) is
+marked `HIGH_POTENTIAL_NEEDS_ENRICHMENT`. This is **not a score bonus** and is
+deliberately not one. It means exactly: *prioritise enrichment before judging
+this*. No company is ever named in that rule, and the title has to name a
+technology domain too, so "Head of Sales" is not high potential.
+
+### The enrichment pipeline
+
+**Enrich** on a card - and the automatic pass after an import - tries four
+things, cheapest and most trustworthy first (`jobscanner/enrichment.py`):
+
+1. **The local database.** The same posting is very often already here,
+   delivered in full by the company's own board under a different URL. Matched
+   on the canonical URL, the LinkedIn id, or company + title + location.
+2. **The company's own configured source.** If the employer is on the watchlist
+   with a source that has *proven* it answers (ACTIVE - a claimed endpoint is
+   not enough), that board is fetched once per session and matched by title and
+   location. Ten roles from one employer cost one request.
+3. **The public original posting.** If the job has a public ATS or careers URL,
+   that page is read through the same safe mechanism the `jsonld` source uses,
+   and its schema.org `JobPosting` description is taken. **LinkedIn URLs are
+   excluded by construction** - LinkedIn is a discovery channel here and
+   nothing else.
+4. **Nothing.** The card says *No canonical description found*, the job keeps
+   `NEEDS_ENRICHMENT`, and it is left exactly as it was. A failed enrichment is
+   never destructive, and a description is never invented, summarised or
+   generated. A one-character "description" from a board that answers with a
+   non-breaking space is not a find either.
+
+A rescan never undoes this: when the incoming text is shorter than what is
+stored, the stored description is kept and the job is re-scored on it.
+
+### Hands-on IC detection
+
+The Career Direction Adjustment used to call a role feature engineering on the
+strength of a single word. It now reads *families* of responsibility evidence
+and needs at least two distinct ones before any IC classification:
+
+* writing production code as a primary responsibility
+* implementing features, building backend / core services
+* debugging production systems, carrying on-call personally
+* hands-on implementation of infrastructure or tooling
+* the posting saying outright that there are no reports
+
+A language or framework name, "hands-on", or an agile ritual counts for
+**nothing** on its own - those only add weight to a family that has already
+fired, which is the "coupled with implementation responsibility" rule.
+
+Against that, leadership and ownership evidence protects a role: organisational
+ownership, team leadership, strategy and roadmap, multi-team scope, planning
+and budget, service-level ownership. When the responsibilities describe
+leadership at least as loudly as implementation, the IC reading loses.
+
+**Titles are a clue; responsibilities are authoritative.** A *Head of SRE* whose
+description says "no direct reports, daily coding, individual on-call" is an IC
+role and is scored as one. A *Site Reliability Engineer* whose description says
+it owns an organisation is not.
 
 ---
 
@@ -272,14 +460,24 @@ feature implementation, consulting delivery or account management.
 | `CONSULTING_DELIVERY` | -4 to -9 |
 | `ACCOUNT_ENGAGEMENT_MANAGEMENT` | -6 to -12 |
 | `PURE_FEATURE_ENGINEERING` | -7 to -12 |
+| `INSUFFICIENT_EVIDENCE` | 0 |
+| `HIGH_POTENTIAL_NEEDS_ENRICHMENT` | 0 |
 
-Three rules keep the adjustments honest:
+Four rules keep the adjustments honest:
 
+* **Missing evidence is not negative evidence.** Both adjustments are
+  deductions, and a deduction has to be earned by something the posting
+  actually says. At LOW evidence neither fires and the score is provisional; at
+  MEDIUM neither may reach the harsh end of its band. See
+  [Evidence and enrichment](#evidence-and-enrichment).
 * **Responsibility-driven, not title-driven.** A title hit weighs more than a
   body hit because a title names the primary job, but a title alone never
-  saturates an adjustment. A title that names a *wanted* shape also protects the
-  posting: "Site Reliability Engineer - Application Edge" is an SRE role even
-  though the text mentions building things.
+  saturates an adjustment, and it never wins an argument with the
+  responsibilities. A title that names a *wanted* shape protects a posting
+  against weak counter-evidence - "Site Reliability Engineer - Application
+  Edge" is an SRE role even though the text mentions building things - but two
+  distinct families of implementation responsibility beat it, and a Head of SRE
+  that describes daily coding and no reports is scored as the IC role it is.
 * **Dominance, not presence.** Normal senior behaviour - cross-functional
   collaboration, stakeholder management, executive communication, influence
   without authority, coordination across teams - costs exactly nothing. A
@@ -302,11 +500,18 @@ technically strong job that moved down the list always says why.
 | 65-74 | Worth reviewing |
 | 55-64 | Edge case |
 | below 55 | Low priority - ranked last, never deleted |
+| *provisional* | not enough evidence to stand behind a number yet |
 
 Ranking uses the Personal Fit Score. Company priority is only ever a
 tie-breaker: the ordering is fit first, then priority, then posting date, so a
 priority-A job that scored 64 can never appear above a priority-B job that
 scored 82.
+
+**A score is never a lifecycle event.** The band decides the label and the
+order. It does not decide visibility, expiry, or persistence: every active
+Swiss-eligible job is in the default list whatever it scored. The profile's
+*target score line* (formerly "minimum match score") is a marker for the
+"relevant" counter and nothing filters on it.
 
 `POST /api/jobs/rescore` re-applies the current profile and fit model to every
 stored job. Nothing but the score and its explanation is rewritten - state,

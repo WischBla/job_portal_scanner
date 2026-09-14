@@ -96,6 +96,10 @@ DEFAULT_PROFILE = {
     'required_keywords': [],
     'preferred_keywords': list(DEFAULT_PREFERRED_KEYWORDS),
     'excluded_keywords': list(DEFAULT_EXCLUDED_KEYWORDS),
+    # A marker, not a gate.  Nothing filters on this any more: every active
+    # Swiss-eligible job is listed whatever it scores, and the Personal Fit
+    # Score decides the order and the band.  The number survives as the line
+    # the "relevant" counter is measured against.
     'minimum_match_score': 65,
     'minimum_salary_chf': 0,
     'allow_missing_salary': True,

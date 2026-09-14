@@ -30,6 +30,7 @@ did that.
 
 import re
 
+from . import evidence as evidence_mod
 from . import fit
 from .locations import fold
 
@@ -169,12 +170,15 @@ class MatchScorer:
 
         # Layer two: is this the *shape* of role the profile wants?  The
         # charges from the base score travel with it so one signal is never
-        # paid for twice.
-        style, direction = fit.assess(job, charges)
+        # paid for twice.  The evidence verdict decides whether the two
+        # adjustments are allowed to fire at all.
+        report = evidence_mod.assess(job)
+        style, direction = fit.assess(job, charges, report)
         total = fit.personal_fit(base, style['adjustment'], direction['adjustment'])
 
         reasons = [r for p in parts for r in p['reasons']]
         concerns = [c for p in parts for c in p['concerns']] + penalty_concerns + advisories
+        concerns = _filter_concerns(concerns, report)
         concerns += _fit_concerns(style, direction)
         terms = []
         for p in parts:
@@ -186,6 +190,11 @@ class MatchScorer:
         breakdown = [{'dimension': p['dimension'], 'points': round(p['points'], 1),
                       'max': p['max'], 'detail': p['detail']} for p in parts]
         return {
+            # What is actually known about this job.  Every consumer - the
+            # card, the filters, the counts - reads the score *and* this,
+            # because a number computed from four words is not the same claim
+            # as a number computed from a job description.
+            'evidence': report,
             # 'score' is the ranked number, so every existing call site orders
             # by personal fit without having to know this module changed.
             'score': total,
@@ -471,6 +480,31 @@ class MatchScorer:
         concerns = [] if hits else ['no AI / automation angle mentioned']
         return self._part('strategic', points, '{0} strategic signal(s)'.format(len(hits)),
                           reasons, concerns, hits[:3])
+
+
+#: Concerns that describe what the posting does *not* say.  Truthful when
+#: there is a description to be silent about; misleading when there is no
+#: description at all, because they read as findings rather than as gaps.
+#: With LOW evidence they are replaced by a single honest sentence.
+ABSENCE_CONCERNS = (
+    'no target responsibility area found',
+    'no technology keywords from your profile found',
+    'no leadership or transformation responsibilities described',
+    'leadership scope unclear',
+    'no AI / automation angle mentioned',
+    'Office presence not specified',
+)
+
+
+def _filter_concerns(concerns, report):
+    """Absence is only a concern once there is something to be absent from."""
+    if report['level'] != evidence_mod.LOW:
+        return concerns
+    kept = [c for c in concerns
+            if not any(c.startswith(prefix) for prefix in ABSENCE_CONCERNS)]
+    kept.insert(0, 'No job description stored yet, so nothing about the actual '
+                   'responsibilities is known - enrich this job before judging it')
+    return kept
 
 
 def _fit_concerns(style, direction):

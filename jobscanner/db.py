@@ -31,7 +31,7 @@ _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 #: and unpacked into a different checkout on another.
 _WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def set_db_path(path):
@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS search_profile (
     required_keywords TEXT NOT NULL DEFAULT '[]',
     preferred_keywords TEXT NOT NULL DEFAULT '[]',
     excluded_keywords TEXT NOT NULL DEFAULT '[]',
-    minimum_match_score INTEGER NOT NULL DEFAULT 65,
+    minimum_match_score INTEGER NOT NULL DEFAULT 65,   -- a marker, never a gate
     minimum_salary_chf INTEGER NOT NULL DEFAULT 0,
     allow_missing_salary INTEGER NOT NULL DEFAULT 1,
     language_preferences TEXT NOT NULL DEFAULT '[]',
@@ -325,6 +325,9 @@ SOURCE_HEALTH_COLUMNS = (
     ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
     ('last_error', "TEXT NOT NULL DEFAULT ''"),
     ('job_count_last_scan', 'INTEGER NOT NULL DEFAULT 0'),
+    ('last_outcome', "TEXT NOT NULL DEFAULT ''"),
+    ('last_http_status', 'INTEGER NOT NULL DEFAULT 0'),
+    ('last_retry_count', 'INTEGER NOT NULL DEFAULT 0'),
 )
 JOB_SOURCE_HEALTH_COLUMNS = (
     ('last_status', "TEXT NOT NULL DEFAULT ''"),
@@ -332,6 +335,15 @@ JOB_SOURCE_HEALTH_COLUMNS = (
     ('last_success_at', "TEXT NOT NULL DEFAULT ''"),
     ('last_error', "TEXT NOT NULL DEFAULT ''"),
     ('last_job_count', 'INTEGER NOT NULL DEFAULT 0'),
+    # -- migration 012: what the request actually did ---------------------
+    # A source that failed and a source that honestly returned nothing look
+    # identical in a status column alone, and only one of them may ever
+    # retire a job.  These record enough to tell them apart afterwards.
+    ('last_outcome', "TEXT NOT NULL DEFAULT ''"),
+    ('last_http_status', 'INTEGER NOT NULL DEFAULT 0'),
+    ('last_retry_count', 'INTEGER NOT NULL DEFAULT 0'),
+    ('last_attempt_at', "TEXT NOT NULL DEFAULT ''"),
+    ('last_authoritative_at', "TEXT NOT NULL DEFAULT ''"),
 )
 
 #: Marks a one-shot data migration as done, so it can correct seeded rows once
@@ -542,6 +554,37 @@ def migrate(conn):
     _add_column(conn, 'discovered_jobs', 'needs_details', 'INTEGER NOT NULL DEFAULT 0')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_linkedin ON discovered_jobs(linkedin_job_id)')
 
+    # -- migration 012: evidence, enrichment and an honest lifecycle -------
+    # Discovery, enrichment, scoring and visibility are four different
+    # questions.  These columns are what lets the rest of the code keep them
+    # apart: how much is known about a job (``evidence_level``), what should
+    # be done about it (``enrichment_state``), how far the Personal Fit Score
+    # can be trusted (``fit_confidence`` / ``fit_provisional``), where a
+    # description came from (``enrichment_source``) - and, separately from all
+    # of that, why a job left the list (``lifecycle_reason``) and how many
+    # successful scans have now failed to find it (``missing_scans``).
+    #
+    # Nothing here is a filter.  A job is never hidden, retired or deleted
+    # because of an evidence column; a score has never been a lifecycle event
+    # and after this migration it cannot become one.
+    _add_column(conn, 'discovered_jobs', 'evidence_level', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'evidence_detail', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'enrichment_state', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'fit_confidence', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'fit_provisional', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'high_potential', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'enrichment_source', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'enrichment_detail', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'enrichment_at', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'missing_scans', 'INTEGER NOT NULL DEFAULT 0')
+    _add_column(conn, 'discovered_jobs', 'lifecycle_reason', "TEXT NOT NULL DEFAULT ''")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_enrichment '
+                 'ON discovered_jobs(enrichment_state)')
+    # Rows stored before this migration are re-assessed by the rescore below;
+    # until then the honest default is "we do not know", not "ENRICHED".
+    conn.execute("UPDATE discovered_jobs SET enrichment_state='NEEDS_ENRICHMENT', "
+                 "evidence_level='LOW', fit_confidence='LOW' WHERE enrichment_state=''")
+
     _seed_sources(conn)
     _seed_presets(conn)
     _seed_watchlist(conn)
@@ -560,9 +603,36 @@ def migrate(conn):
     _add_column(conn, 'person_profile', 'achievements', "TEXT NOT NULL DEFAULT '[]'")
 
     _portabilise_document_paths(conn)
+    _assess_existing_evidence(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
+
+
+EVIDENCE_MARKER_KEY = 'evidence_rescored'
+
+
+def _assess_existing_evidence(conn):
+    """Give every stored job its evidence verdict - exactly once.
+
+    Jobs discovered before migration 012 were scored by a model that treated a
+    missing description as a finding rather than as a gap, so their Personal
+    Fit Score and their two adjustments were computed under the old rule.  One
+    rescore brings them onto the current model; the marker makes it a one-shot
+    data migration rather than a cost on every start.
+
+    Additive, like every other rescore path: only the score columns and their
+    explanations change.  A job's state, its feedback and its link to an
+    application are never touched.
+    """
+    done = conn.execute('SELECT value FROM schema_meta WHERE key=?',
+                        (EVIDENCE_MARKER_KEY,)).fetchone()
+    if done:
+        return 0
+    count = schema_v2.rescore_existing_jobs(conn, load_profile(conn))
+    conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
+                 (EVIDENCE_MARKER_KEY, now_iso()))
+    return count
 
 
 def _seed_sources(conn):

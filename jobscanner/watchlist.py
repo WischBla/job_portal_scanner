@@ -150,28 +150,39 @@ class CompanyWatchlist:
         return True
 
     # -- source health -----------------------------------------------------
-    def record_check(self, entry_id, status, job_count=0, detail=''):
+    def record_check(self, entry_id, status, job_count=0, detail='', diagnostics=None):
         """Store the outcome of one source check or scan.
 
         ``last_success_at`` only moves forward on a real success, so an entry
         that broke three days ago keeps saying when it last worked.
+        ``diagnostics`` carries the HTTP-level facts - which outcome, which
+        status code, how many retries - so Config can say *why* a company
+        stopped producing jobs rather than only that it did.  The whitelist in
+        :func:`jobscanner.sources.base.rate_limit_headers` is the reason no
+        request header ever reaches this table.
         """
         status = status if status in SOURCE_STATUSES else registry.ERROR
+        diagnostics = diagnostics or {}
+        outcome = str(diagnostics.get('outcome') or '')[:40]
+        http_status = int(diagnostics.get('http_status') or 0)
+        retries = int(diagnostics.get('retries') or 0)
         ts = now_iso()
         if status == registry.ACTIVE:
             self.conn.execute(
                 'UPDATE company_watchlist SET source_status=?, last_checked_at=?, '
                 'last_success_at=?, last_error=?, job_count_last_scan=?, last_scan_at=?, '
-                'last_scan_status=?, updated_at=? WHERE id=?',
+                'last_scan_status=?, last_outcome=?, last_http_status=?, last_retry_count=?, '
+                'updated_at=? WHERE id=?',
                 (status, ts, ts, '', int(job_count or 0), ts, str(detail or '')[:120],
-                 ts, entry_id))
+                 outcome, http_status, retries, ts, entry_id))
         else:
             self.conn.execute(
                 'UPDATE company_watchlist SET source_status=?, last_checked_at=?, '
                 'last_error=?, job_count_last_scan=?, last_scan_at=?, last_scan_status=?, '
+                'last_outcome=?, last_http_status=?, last_retry_count=?, '
                 'updated_at=? WHERE id=?',
                 (status, ts, str(detail or '')[:400], int(job_count or 0), ts,
-                 str(detail or '')[:120], ts, entry_id))
+                 str(detail or '')[:120], outcome, http_status, retries, ts, entry_id))
         self.conn.commit()
         return self.get(entry_id)
 
@@ -188,8 +199,15 @@ class CompanyWatchlist:
     def record_scan_results(self, results):
         """Apply one scan's per-source outcome to every entry it belongs to.
 
-        ``results`` maps ``job_sources.name`` -> ``(status, job_count, detail)``.
+        ``results`` maps ``job_sources.name`` ->
+        ``(outcome, job_count, detail[, diagnostics])``.  The outcome
+        vocabulary is the HTTP-level one from
+        :mod:`jobscanner.sources.base`; the watchlist stores the coarse
+        ACTIVE / ERROR status the UI has always shown *and* the outcome, so a
+        rate-limited company is not indistinguishable from a broken one.
         """
+        from .sources import base as source_base
+
         by_source = {r['name']: r['watch_id'] for r in self.conn.execute(
             'SELECT s.name AS name, w.id AS watch_id FROM company_watchlist w '
             'JOIN job_sources s ON s.id = w.source_id').fetchall()}
@@ -198,8 +216,11 @@ class CompanyWatchlist:
             entry_id = by_source.get(name)
             if entry_id is None:
                 continue
-            status, count, detail = outcome
-            self.record_check(entry_id, status, count, detail)
+            result, count, detail = outcome[0], outcome[1], outcome[2]
+            diagnostics = outcome[3] if len(outcome) > 3 else {}
+            status = (registry.ACTIVE if result in (source_base.SUCCESS, registry.ACTIVE)
+                      else registry.ERROR)
+            self.record_check(entry_id, status, count, detail, diagnostics)
             touched += 1
         return touched
 
@@ -251,15 +272,44 @@ class CompanyWatchlist:
 
 
 def source_health(conn):
-    """Config -> Job Sources: one row per source kind, plus every failure.
+    """Config -> Job Sources: one row per source kind, every failure, and the
+    per-source diagnostics that explain them.
 
     Companies whose integration is broken are listed explicitly; a source that
-    stopped working must never just quietly return nothing.
+    stopped working must never just quietly return nothing.  ``diagnostics``
+    is the per-source detail the Config screen tabulates - last attempt, last
+    success, outcome, HTTP status, jobs returned, retries, last error - which
+    is what turns "this returned nothing" into something actionable.
+
+    No request header and no credential appears here.  The adapters send none,
+    and only the whitelisted public rate-limit headers are ever read at all
+    (:func:`jobscanner.sources.base.rate_limit_headers`).
     """
+    from .sources import base as source_base
+
     rows = [row_to_dict(r) for r in conn.execute(
         'SELECT s.*, w.company_name AS company_name, w.source_status AS watch_status '
         'FROM job_sources s LEFT JOIN company_watchlist w ON w.source_id = s.id '
         'ORDER BY s.source_type, s.name').fetchall()]
+
+    diagnostics = [{
+        'source': row['name'],
+        'company': row.get('company_name') or '',
+        'source_type': row['source_type'],
+        'last_attempt_at': row.get('last_attempt_at') or row.get('last_checked_at') or '',
+        'last_success_at': row.get('last_success_at') or '',
+        'last_authoritative_at': row.get('last_authoritative_at') or '',
+        'status': row.get('last_status') or '',
+        'outcome': row.get('last_outcome') or '',
+        'outcome_label': source_base.OUTCOME_LABELS.get(row.get('last_outcome') or '', ''),
+        'http_status': int(row.get('last_http_status') or 0),
+        'jobs_returned': int(row.get('last_job_count') or 0),
+        'retries': int(row.get('last_retry_count') or 0),
+        'error': row.get('last_error') or '',
+        # The load-bearing one: a source that is not authoritative took no part
+        # in retiring anything, and the user should be able to see that.
+        'authoritative': (row.get('last_outcome') or '') in source_base.AUTHORITATIVE_OUTCOMES,
+    } for row in rows]
 
     kinds, failures = {}, []
     for row in rows:
@@ -286,6 +336,9 @@ def source_health(conn):
                 'company': row.get('company_name') or '',
                 'source_type': row['source_type'],
                 'status': status,
+                'outcome': row.get('last_outcome') or '',
+                'http_status': int(row.get('last_http_status') or 0),
+                'retries': int(row.get('last_retry_count') or 0),
                 'error': row.get('last_error') or '',
                 'last_success_at': row.get('last_success_at') or '',
             })
@@ -306,4 +359,4 @@ def source_health(conn):
         'sources': 0, 'companies': manual_count, 'ok': 0, 'failing': 0, 'unchecked': 0,
         'jobs_returned': 0, 'last_success_at': '', 'status': '-',
     })
-    return {'sources': summary, 'failures': failures}
+    return {'sources': summary, 'failures': failures, 'diagnostics': diagnostics}

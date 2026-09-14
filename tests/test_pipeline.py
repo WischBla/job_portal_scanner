@@ -101,15 +101,33 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('Director Platform Engineering', found)
         self.assertNotIn('Head of Engineering Operations', found)
 
-    def test_changing_the_minimum_score_changes_the_next_scan(self):
+    def test_the_minimum_score_no_longer_removes_anything(self):
+        """A score ranks a job. It has never been allowed to delete one.
+
+        This used to be the opposite assertion: a minimum of 99 emptied the
+        list. That is what made "the scanner did not judge this job well" and
+        "the scanner could not judge this job at all" look identical, so the
+        cut is gone. The threshold survives as the marker the counts use.
+        """
         with jsdb.connect() as conn:
             jsdb.save_profile(conn, dict(make_profile(minimum_match_score=99)))
         self.scan()
-        self.assertEqual(self.titles(), {})
-        with jsdb.connect() as conn:
-            jsdb.save_profile(conn, dict(make_profile(minimum_match_score=50)))
-        self.scan()
-        self.assertTrue(self.titles())
+        found = self.titles()
+        self.assertIn('Director Platform Engineering', found)
+        self.assertIn('Head of Engineering Operations', found)
+        for job in found.values():
+            self.assertLess(job['match_score'], 99)     # every one is below the minimum
+
+    def test_a_low_scoring_swiss_job_stays_in_the_list(self):
+        """Below 65 is a band, not a bin."""
+        self.scan(extra=[{'source': 'Fake', 'source_type': 'fake', 'external_id': 'thin',
+                          'company': 'Thin AG', 'title': 'Cloud Operations Lead',
+                          'location': 'Zurich, Switzerland',
+                          'job_url': 'https://example.test/thin', 'description': ''}])
+        job = self.titles()['Cloud Operations Lead']
+        self.assertLess(job['match_score'], 65)
+        self.assertEqual(job['state'], 'NEW')
+        self.assertEqual(job['enrichment_state'], 'NEEDS_ENRICHMENT')
 
     def test_country_mode_off_admits_foreign_jobs(self):
         with jsdb.connect() as conn:

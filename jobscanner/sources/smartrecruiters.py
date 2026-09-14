@@ -21,6 +21,10 @@ PAGE_SIZE = 100
 MAX_PAGES = 10
 #: Detail lookups are one request per posting, so a very large board is capped.
 MAX_DETAILS = 120
+#: ... and they are not issued as a burst.  SmartRecruiters publishes a modest
+#: rate for the public Posting API; two in flight is a steady trickle that a
+#: full board still finishes in seconds.
+DETAIL_WORKERS = 2
 
 _SECTION_ORDER = ('jobDescription', 'qualifications', 'additionalInformation',
                   'companyDescription')
@@ -45,8 +49,13 @@ class SmartRecruitersAdapter(JobSourceAdapter):
 
         postings = self._all_postings(company_id)
         wanted = postings[:MAX_DETAILS]
+        # One request per posting is the expensive part of this adapter, so the
+        # fan-out is matched to what SmartRecruiters documents rather than to
+        # what the machine could manage.  The per-provider gate in
+        # ``sources.base`` enforces the same ceiling for every other caller.
         details = dict(fetch_in_parallel(
-            wanted, lambda item: (item['id'], self._detail(company_id, item['id']))))
+            wanted, lambda item: (item['id'], self._detail(company_id, item['id'])),
+            max_workers=DETAIL_WORKERS))
 
         jobs = []
         for item in postings:

@@ -20,7 +20,17 @@ def assess(title, description, charges=()):
 
 class OperatingStyleClassificationTests(unittest.TestCase):
     def test_normal_senior_collaboration_is_not_penalised(self):
-        """The behaviours the profile calls normal must cost exactly nothing."""
+        """The behaviours the profile calls normal must cost exactly nothing.
+
+        Each phrase is placed inside a real posting rather than tested as a
+        bare line: on its own a single sentence is LOW evidence and scores
+        zero for a quite different reason, which would make the assertion
+        vacuous.
+        """
+        posting = ('You will own the reliability and observability of our production '
+                   'platform, define the technical roadmap and lead a team of platform '
+                   'engineers. {0} You will be responsible for incident management, '
+                   'SLOs and the engineering operating model.')
         normal = [
             'Work cross-functionally with product and design teams.',
             'Stakeholder management across several engineering teams.',
@@ -28,10 +38,10 @@ class OperatingStyleClassificationTests(unittest.TestCase):
             'Drive outcomes through influence without authority.',
             'Coordination across multiple teams in a matrix organisation.',
         ]
-        for description in normal:
-            style, _ = assess('Head of Platform Engineering', description)
-            self.assertEqual(style['adjustment'], 0.0, description)
-            self.assertEqual(style['classification'], 'TECHNICAL_OWNERSHIP', description)
+        for phrase in normal:
+            style, _ = assess('Head of Platform Engineering', posting.format(phrase))
+            self.assertEqual(style['adjustment'], 0.0, phrase)
+            self.assertEqual(style['classification'], 'TECHNICAL_OWNERSHIP', phrase)
 
     def test_the_documented_benign_example_stays_at_zero(self):
         style, _ = assess(

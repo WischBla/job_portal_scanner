@@ -2,13 +2,25 @@
 
 The screen is deliberately dumb: it renders exactly what this module returns.
 Every card carries a score, a classification, at most five reasons, at most
-three concerns and a compensation estimate - with or without AI.
+three concerns, a compensation estimate - and, since the evidence model, an
+honest statement of how much the score is worth.
+
+Two rules about visibility live here:
+
+**Every active job is in the default list.**  There is no score threshold on
+the Jobs view.  The Personal Fit Score decides the order and the band label;
+it has never been allowed to decide whether a job exists, and a job the
+scanner knows too little about is the last thing that should disappear.
+
+**A filter is a view, not a lifecycle.**  ``FILTERS`` below narrows what is
+shown; nothing in it changes a job's state, its persistence or its score.
 """
 
 import json
 from datetime import datetime, timezone
 
 from . import compensation
+from . import evidence as evidence_mod
 from .ai import service as ai_service
 from .db import connect, row_to_dict
 #: Recommendation bands, read from the Personal Fit Score.  The single source
@@ -52,6 +64,36 @@ OPEN_STATES = ('NEW', 'SEEN', 'SAVED', 'APPLIED')
 #: Never shown as a current recommendation: ignored by the user, or retired by
 #: the source because the posting is gone.
 HIDDEN_STATES = ('IGNORED', 'EXPIRED')
+
+#: The Jobs screen's filters.  ``all`` is the default and it really does mean
+#: all: every active Swiss-eligible job, whatever it scored and however little
+#: is known about it.  Each entry is the SQL predicate for that view; none of
+#: them is a lifecycle rule, and none of them can remove a job from the
+#: database.
+ALL = 'all'
+FILTERS = {
+    ALL: ("j.state NOT IN ('IGNORED','EXPIRED')", ()),
+    'top': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score >= ?", (STRONG_FROM,)),
+    'review': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score >= ? "
+               'AND j.match_score < ?', (REVIEW_FROM, STRONG_FROM)),
+    'edge': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score >= ? "
+             'AND j.match_score < ?', (WEAK_FROM, REVIEW_FROM)),
+    'low': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score < ?", (WEAK_FROM,)),
+    'enrich': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.enrichment_state = ?",
+               (evidence_mod.NEEDS_ENRICHMENT,)),
+    'saved': ("j.state = 'SAVED'", ()),
+    'ignored': ("j.state = 'IGNORED'", ()),
+}
+FILTER_LABELS = [
+    (ALL, 'All active'),
+    ('top', 'Exceptional / Strong'),
+    ('review', 'Worth reviewing'),
+    ('edge', 'Edge'),
+    ('low', 'Low priority'),
+    ('enrich', 'Needs enrichment'),
+    ('saved', 'Saved'),
+    ('ignored', 'Ignored'),
+]
 
 
 def classify(score):
@@ -182,6 +224,20 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
         # description.  The card says so instead of presenting a fit score
         # that was computed from four words.
         'needs_details': bool(job.get('needs_details')),
+        # How much the score above is worth.  "78, confidence HIGH" and
+        # "78, provisional" are different claims and the card makes the
+        # difference visible rather than showing one number for both.
+        'evidence': job.get('evidence_level') or evidence_mod.LOW,
+        'evidence_detail': job.get('evidence_detail') or '',
+        'enrichment_state': job.get('enrichment_state') or evidence_mod.NEEDS_ENRICHMENT,
+        'confidence': job.get('fit_confidence') or evidence_mod.LOW,
+        'provisional': bool(job.get('fit_provisional')),
+        'high_potential': bool(job.get('high_potential')),
+        'enrichment_source': job.get('enrichment_source') or '',
+        'enrichment_detail': job.get('enrichment_detail') or '',
+        'enrichment_at': job.get('enrichment_at') or '',
+        'has_description': bool(str(job.get('description') or '').strip()),
+        'lifecycle_reason': job.get('lifecycle_reason') or '',
         'feedback': job.get('feedback') or '',
         'feedback_reason': job.get('feedback_reason') or '',
         'reasons': reasons,
@@ -205,7 +261,13 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
     return card
 
 
-def list_cards(conn=None, state='', limit=200, include_ignored=False):
+def list_cards(conn=None, state='', limit=200, include_ignored=False, view=ALL):
+    """The cards for one view of the Jobs screen.
+
+    ``view`` narrows what is shown and nothing else; the default really is
+    every active job.  ``state`` is the older, more specific selector and still
+    wins when it is given, because the Ignored list is addressed that way.
+    """
     owns = conn is None
     conn = conn or connect()
     try:
@@ -216,8 +278,12 @@ def list_cards(conn=None, state='', limit=200, include_ignored=False):
         if state:
             sql += ' WHERE j.state=?'
             params.append(state)
-        elif not include_ignored:
-            sql += " WHERE j.state NOT IN ('IGNORED', 'EXPIRED')"
+        elif include_ignored and view == ALL:
+            pass                                  # everything, ignored included
+        else:
+            where, values = FILTERS.get(str(view or ALL), FILTERS[ALL])
+            sql += ' WHERE ' + where
+            params.extend(values)
         # Contract of the Jobs screen: score first, company priority only as a
         # tie-breaker, newest last.
         sql += (' ORDER BY j.match_score DESC, {0}, '
@@ -262,6 +328,23 @@ def counts(conn=None):
             'strong': one('SELECT COUNT(*) FROM discovered_jobs WHERE match_score>=? '
                           "AND match_score<? AND state NOT IN ('IGNORED', 'EXPIRED')",
                           STRONG_FROM, EXCELLENT_FROM),
+            # One number per filter chip, so the Jobs screen can label each
+            # view without fetching it.  Counts, like filters, are a view:
+            # nothing here decides what is kept.
+            'filters': {key: one('SELECT COUNT(*) FROM discovered_jobs j WHERE {0}'.format(
+                FILTERS[key][0]), *FILTERS[key][1]) for key, _label in FILTER_LABELS},
+            'needs_enrichment': one(
+                'SELECT COUNT(*) FROM discovered_jobs WHERE enrichment_state=? '
+                "AND state NOT IN ('IGNORED', 'EXPIRED')", evidence_mod.NEEDS_ENRICHMENT),
+            'high_potential': one(
+                'SELECT COUNT(*) FROM discovered_jobs WHERE high_potential=1 '
+                "AND state NOT IN ('IGNORED', 'EXPIRED')"),
+            'enriched': one(
+                'SELECT COUNT(*) FROM discovered_jobs WHERE enrichment_state=? '
+                "AND state NOT IN ('IGNORED', 'EXPIRED')", evidence_mod.ENRICHED),
+            'partial': one(
+                'SELECT COUNT(*) FROM discovered_jobs WHERE enrichment_state=? '
+                "AND state NOT IN ('IGNORED', 'EXPIRED')", evidence_mod.PARTIAL),
         }
     finally:
         if owns:
