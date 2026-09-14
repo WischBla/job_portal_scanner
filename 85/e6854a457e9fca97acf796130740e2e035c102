@@ -1,0 +1,52 @@
+jobscanner/db.py
+  s_2f447c7493ce4c::t_e9a2e5f9fbb835 34,588-603,623,629-654
+  s_2f447c7493ce4c::t_d8aa1617594fd5 655-656
+static/styles.css
+  s_2f447c7493ce4c::t_fe17c3ed16621d 148-160
+jobscanner/repository.py
+  s_2f447c7493ce4c::t_a5c2097aec9fe3 5,45,161-164,233
+jobscanner/schema_v2.py
+  s_2f447c7493ce4c::t_a5c2097aec9fe3 248,255-260,269
+tests/test_job_card_ux.py
+  s_2f447c7493ce4c::t_ad30e8460292b0 196-197
+  s_2f447c7493ce4c::t_f3275450d2fbde 180,183-184,187-195
+static/app.js
+  s_2f447c7493ce4c::t_45fb01378d9e24 8-13,655-658,661-662,687,719,721
+  s_2f447c7493ce4c::t_7c1a1d6c952832 365-384,442,521-523
+tests/test_career_scope.py
+  s_2f447c7493ce4c::t_0f5314be8f4141 1-433
+jobscanner/jobs_service.py
+  s_2f447c7493ce4c::t_0fe792808af1fc 8,10-20,98-107,365
+  s_2f447c7493ce4c::t_17d7b662aa8c4e 29,109-131,133-135,149,151,304-310,348,368,429-438
+jobscanner/api/jobs_api.py
+  s_2f447c7493ce4c::t_fd96e505e0cb20 44,48-52,54
+README.md
+  s_2f447c7493ce4c::t_c312ac0f35b791 41-61,71-72,87-88
+  s_2f447c7493ce4c::t_0e7c085c4302b4 428-511
+jobscanner/career_scope.py
+  s_2f447c7493ce4c::t_176645d332ffdc 1-83,88-90,101-128,137-150,152-168,172-308,337-368,370,379-382,385-387,390-437,443-446,452-549,574,576-588,598-601,607-608,610-611,613-677
+  s_2f447c7493ce4c::t_55c415c723b190 369,371-378,383-384,388-389
+  s_2f447c7493ce4c::t_518f59bb692d6b 597
+  s_2f447c7493ce4c::t_0d389dd3fda11d 91-100
+  s_2f447c7493ce4c::t_2d172ab4ac4b18 84-87,169-171,602-606,609,612
+  s_2f447c7493ce4c::t_de2ce9d56539a7 151,438-442,447-451,589-596
+  s_2f447c7493ce4c::t_0d1026e4bc79e7 309-336
+  s_2f447c7493ce4c::t_897c075ec19c17 550-573,575
+  s_2f447c7493ce4c::t_832621433f59da 129-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "85e6854a457e9fca97acf796130740e2e035c102",
+  "prompts": {},
+  "sessions": {
+    "s_2f447c7493ce4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cfbb57c4-3c92-4b07-b412-de3037e27446",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
