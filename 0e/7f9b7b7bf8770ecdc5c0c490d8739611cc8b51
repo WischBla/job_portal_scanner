@@ -1,0 +1,21 @@
+jobscanner/career_scope.py
+  s_2f447c7493ce4c::t_b4698b6afe3ff5 235-238,360,462-466
+tests/test_career_scope.py
+  s_2f447c7493ce4c::t_d0b09c915bb4d1 177-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "0e7f9b7b7bf8770ecdc5c0c490d8739611cc8b51",
+  "prompts": {},
+  "sessions": {
+    "s_2f447c7493ce4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cfbb57c4-3c92-4b07-b412-de3037e27446",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
