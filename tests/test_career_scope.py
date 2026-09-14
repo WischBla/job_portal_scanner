@@ -174,6 +174,30 @@ class ResponsibilitiesOverrideTitlesTests(unittest.TestCase):
         self.assertLess(len(understanding['implementation_families']),
                         career_scope.MIN_IMPLEMENTATION_FAMILIES)
 
+    def test_generic_work_verbs_are_not_implementation_evidence(self):
+        """"Implement and maintain" names no language and no deliverable.
+
+        It fires on any posting that describes any work at all, and it was
+        enough to exclude a *Senior Security Analyst* whose actual mandate was
+        managing detection content and mentoring analysts.
+        """
+        verdict = scope_of(
+            'Senior Security Analyst',
+            'You will implement and maintain our detection standards, develop and operate '
+            'the response process, take part in the on call duty and mentor less '
+            'experienced analysts. Team leadership for the detection function.')
+        self.assertNotEqual(career_scope.OUT_OF_SCOPE, verdict['scope'])
+        self.assertNotIn('codes_in_language', verdict['implementation_families'])
+
+    def test_a_hands_on_verdict_names_the_right_kind_of_role(self):
+        """A title with no engineering job function is not "software engineering"."""
+        verdict = scope_of(
+            'Laboratory Operations Specialist',
+            'You will write production code for our instrument drivers, build tooling, '
+            'develop APIs and debug production systems day to day.')
+        self.assertEqual(career_scope.OUT_OF_SCOPE, verdict['scope'])
+        self.assertEqual(career_scope.REASON_GENERIC_IC, verdict['reason'])
+
     def test_one_implementation_family_is_never_enough_on_its_own(self):
         verdict = scope_of(
             'Technology Transformation Lead',

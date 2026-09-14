@@ -232,7 +232,10 @@ EXTRA_IMPLEMENTATION_FAMILIES = {
         'production go', 'production java', 'python services', 'go services',
         'java services', 'hands on software development',
         'software development in', 'day to day implementation',
-        'daily implementation', 'implement and maintain', 'develop and operate',
+        'daily implementation',
+        # "implement and maintain" and "develop and operate" are deliberately
+        # absent: they name no language and no deliverable, so they fire on
+        # any posting that describes any work at all.
     ],
     # building the services / components themselves
     'develops_services': [
@@ -354,6 +357,7 @@ REASON_ARCHITECTURE_IC = 'Hands-on architecture role'
 REASON_PLATFORM_IC = 'Hands-on platform / infrastructure role'
 REASON_DATA_IC = 'Hands-on data engineering role'
 REASON_DECLARED_IC = 'Individual contributor role without organisational scope'
+REASON_GENERIC_IC = 'Hands-on implementation role'
 
 REASON_LEADERSHIP = 'Leadership and ownership scope'
 REASON_MANAGEMENT_TITLE = 'Engineering / technology management role'
@@ -455,7 +459,11 @@ def _ic_reason(title):
     if _hits(title, ['platform', 'infrastructure', 'cloud', 'devops', 'devsecops',
                      'systems', 'system', 'network', 'observability']):
         return REASON_PLATFORM_IC
-    return REASON_SOFTWARE_IC
+    if _hits(title, EXPLICIT_IC_TITLES + AMBIGUOUS_IC_TITLES + ['engineer', 'developer']):
+        return REASON_SOFTWARE_IC
+    # The title names no engineering job function at all; the verdict came from
+    # the responsibilities, so the sentence says that and nothing more specific.
+    return REASON_GENERIC_IC
 
 
 def _detail(scope, reason, implementation, leadership, extra=''):
