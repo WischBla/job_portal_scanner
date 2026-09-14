@@ -5,12 +5,19 @@ Every card carries a score, a classification, at most five reasons, at most
 three concerns, a compensation estimate - and, since the evidence model, an
 honest statement of how much the score is worth.
 
-Two rules about visibility live here:
+Three rules about visibility live here:
 
-**Every active job is in the default list.**  There is no score threshold on
-the Jobs view.  The Personal Fit Score decides the order and the band label;
-it has never been allowed to decide whether a job exists, and a job the
-scanner knows too little about is the last thing that should disappear.
+**No score ever hides a job.**  There is no score threshold on any view of the
+Jobs screen.  The Personal Fit Score decides the order and the band label; it
+has never been allowed to decide whether a job exists, and a job the scanner
+knows too little about is the last thing that should disappear.
+
+**The default view is a career scope, not a score.**  The screen opens on
+*Leadership & Management*: every active job classified IN_SCOPE or UNCERTAIN
+by :mod:`jobscanner.career_scope`.  Hands-on implementation roles are one chip
+away in *All active* and *Out of scope* - never gone, never expired, never
+deleted, and never hidden at all when the user saved them or started tracking
+an application against them.
 
 **A filter is a view, not a lifecycle.**  ``FILTERS`` below narrows what is
 shown; nothing in it changes a job's state, its persistence or its score.
@@ -19,6 +26,7 @@ shown; nothing in it changes a job's state, its persistence or its score.
 import json
 from datetime import datetime, timezone
 
+from . import career_scope as scope_mod
 from . import compensation
 from . import evidence as evidence_mod
 from .ai import service as ai_service
@@ -87,13 +95,44 @@ OPEN_STATES = ('NEW', 'SEEN', 'SAVED', 'APPLIED')
 #: the source because the posting is gone.
 HIDDEN_STATES = ('IGNORED', 'EXPIRED')
 
-#: The Jobs screen's filters.  ``all`` is the default and it really does mean
-#: all: every active Swiss-eligible job, whatever it scored and however little
-#: is known about it.  Each entry is the SQL predicate for that view; none of
-#: them is a lifecycle rule, and none of them can remove a job from the
-#: database.
+#: The Jobs screen's filters.  ``all`` really does mean all: every active
+#: Swiss-eligible job, whatever it scored, however little is known about it and
+#: whatever career scope it was given.  Each entry is the SQL predicate for
+#: that view; none of them is a lifecycle rule, and none of them can remove a
+#: job from the database.
+#:
+#: The four score bands (``top`` .. ``low``) are deliberately left as views
+#: over *all* active jobs rather than over the default scope: a chip labelled
+#: "Worth reviewing" should select exactly what its label says, and mixing two
+#: independent axes into one chip would make its count impossible to read.
 ALL = 'all'
+#: The scope views.  ``LEADERSHIP`` is what the screen opens on: IN_SCOPE plus
+#: UNCERTAIN, which is every job that could realistically be the next role.
+LEADERSHIP = 'leadership'
+OUT_OF_SCOPE_VIEW = 'out_of_scope'
+DEFAULT_VIEW = LEADERSHIP
+
+#: Every job the lifecycle still considers live.  The one clause every view
+#: except the Saved and Ignored lists starts from.
+_ACTIVE = "j.state NOT IN ('IGNORED','EXPIRED')"
+
+#: The user's own decision, which outranks the classifier in both directions.
+#: A job that was saved by hand or that already has a tracking record in
+#: ``applications`` stays in the default list whatever the classifier now
+#: thinks of it - an explicit decision is not something an automatic
+#: classification gets to overrule (specification 13).
+_PROTECTED = ("(j.state IN ('SAVED','APPLIED') OR EXISTS "
+              '(SELECT 1 FROM applications a WHERE a.id = j.application_id OR a.job_id = j.id))')
+
+#: The default view's scope clause.  Note what it does *not* say: nothing here
+#: reads a score, and nothing here changes a state.  An OUT_OF_SCOPE job is
+#: hidden from this one view and from nowhere else.
+_IN_DEFAULT_SCOPE = "(j.career_scope <> '{0}' OR {1})".format(scope_mod.OUT_OF_SCOPE, _PROTECTED)
+
 FILTERS = {
+    LEADERSHIP: ('{0} AND {1}'.format(_ACTIVE, _IN_DEFAULT_SCOPE), ()),
+    OUT_OF_SCOPE_VIEW: ("{0} AND j.career_scope = '{1}'".format(
+        _ACTIVE, scope_mod.OUT_OF_SCOPE), ()),
     ALL: ("j.state NOT IN ('IGNORED','EXPIRED')", ()),
     'top': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score >= ?", (STRONG_FROM,)),
     'review': ("j.state NOT IN ('IGNORED','EXPIRED') AND j.match_score >= ? "
@@ -107,7 +146,9 @@ FILTERS = {
     'ignored': ("j.state = 'IGNORED'", ()),
 }
 FILTER_LABELS = [
+    (LEADERSHIP, 'Leadership & Management'),
     (ALL, 'All active'),
+    (OUT_OF_SCOPE_VIEW, 'Out of scope'),
     ('top', 'Exceptional / Strong'),
     ('review', 'Worth reviewing'),
     ('edge', 'Edge'),
@@ -260,6 +301,13 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
         'confidence': job.get('fit_confidence') or evidence_mod.LOW,
         'provisional': bool(job.get('fit_provisional')),
         'high_potential': bool(job.get('high_potential')),
+        # Would this role realistically be applied for?  A fifth question,
+        # kept apart from the score, the evidence and the lifecycle: it
+        # decides which *view* the job appears in and nothing else.
+        'career_scope': job.get('career_scope') or scope_mod.UNCERTAIN,
+        'career_scope_label': scope_mod.label(job.get('career_scope')),
+        'career_scope_reason': job.get('career_scope_reason') or '',
+        'career_scope_detail': job.get('career_scope_detail') or '',
         'enrichment_source': job.get('enrichment_source') or '',
         'enrichment_detail': job.get('enrichment_detail') or '',
         'enrichment_at': job.get('enrichment_at') or '',
@@ -297,7 +345,7 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
     return card
 
 
-def list_cards(conn=None, state='', limit=200, include_ignored=False, view=ALL):
+def list_cards(conn=None, state='', limit=200, include_ignored=False, view=DEFAULT_VIEW):
     """The cards for one view of the Jobs screen.
 
     ``view`` narrows what is shown and nothing else; the default really is
@@ -314,10 +362,10 @@ def list_cards(conn=None, state='', limit=200, include_ignored=False, view=ALL):
         if state:
             sql += ' WHERE j.state=?'
             params.append(state)
-        elif include_ignored and view == ALL:
+        elif include_ignored and view in (ALL, DEFAULT_VIEW):
             pass                                  # everything, ignored included
         else:
-            where, values = FILTERS.get(str(view or ALL), FILTERS[ALL])
+            where, values = FILTERS.get(str(view or DEFAULT_VIEW), FILTERS[DEFAULT_VIEW])
             sql += ' WHERE ' + where
             params.extend(values)
         # Contract of the Jobs screen: score first, company priority only as a
@@ -378,6 +426,16 @@ def counts(conn=None):
             'enriched': one(
                 'SELECT COUNT(*) FROM discovered_jobs WHERE enrichment_state=? '
                 "AND state NOT IN ('IGNORED', 'EXPIRED')", evidence_mod.ENRICHED),
+            # Career scope, counted over the active list.  Reported so the
+            # classifier can be checked against the data it is filtering.
+            'in_scope': one('SELECT COUNT(*) FROM discovered_jobs WHERE career_scope=? '
+                            "AND state NOT IN ('IGNORED', 'EXPIRED')", scope_mod.IN_SCOPE),
+            'uncertain_scope': one('SELECT COUNT(*) FROM discovered_jobs WHERE career_scope=? '
+                                   "AND state NOT IN ('IGNORED', 'EXPIRED')",
+                                   scope_mod.UNCERTAIN),
+            'out_of_scope': one('SELECT COUNT(*) FROM discovered_jobs WHERE career_scope=? '
+                                "AND state NOT IN ('IGNORED', 'EXPIRED')",
+                                scope_mod.OUT_OF_SCOPE),
             'partial': one(
                 'SELECT COUNT(*) FROM discovered_jobs WHERE enrichment_state=? '
                 "AND state NOT IN ('IGNORED', 'EXPIRED')", evidence_mod.PARTIAL),

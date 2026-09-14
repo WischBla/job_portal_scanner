@@ -38,19 +38,27 @@ which then tells you what to install.
 
 ### Jobs (default)
 
-One button: **Scan for new jobs**. Below it, **every active Swiss-eligible
-opportunity**, sorted by Personal Fit Score and then by recency.
+One button: **Scan for new jobs**. Below it, the **Leadership & Management**
+view: every active Swiss-eligible opportunity whose career scope is IN SCOPE or
+UNCERTAIN, sorted by Personal Fit Score and then by recency.
 
-All of them. There is no score threshold on this screen and no minimum-score
-cut in the scan: the Personal Fit Score decides the *order* and the
-recommendation band, never whether a job exists. A Low Priority job is ranked
-last and labelled honestly; a job the scanner knows too little about is
-labelled *provisional* and is the last thing that should disappear.
+There is no score threshold on this screen and no minimum-score cut in the
+scan: the Personal Fit Score decides the *order* and the recommendation band,
+never whether a job exists. A Low Priority job is ranked last and labelled
+honestly; a job the scanner knows too little about is labelled *provisional*
+and is the last thing that should disappear.
 
-A row of filter chips narrows the same list - **All active** (the default),
-Exceptional / Strong, Worth reviewing, Edge, Low priority, **Needs
-enrichment**, Saved, and the Ignored button. They are views, not lifecycle: no
-chip changes a job's state, its score or its persistence.
+The one thing the default view does narrow is **career scope** - whether the
+role is a hands-on implementation job rather than the leadership direction
+this profile is aiming at. See [Career scope](#career-scope). Hands-on roles
+are not deleted, retired or re-scored; they are one chip away.
+
+A row of filter chips narrows the same list - **Leadership & Management** (the
+default), **All active**, **Out of scope**, Exceptional / Strong, Worth
+reviewing, Edge, Low priority, **Needs enrichment**, Saved, and the Ignored
+button. They are views, not lifecycle: no chip changes a job's state, its
+score or its persistence. The four score bands select over *all* active jobs,
+so a chip labelled "Worth reviewing" selects exactly what its label says.
 
 **Cards are closed by default.** The list is a review queue of several hundred
 jobs, so a closed card carries exactly what a *read this one / skip this one*
@@ -60,6 +68,8 @@ decision needs and nothing else:
   reviewing** (65+), **Edge** (55+), **Low priority** - or `provisional` when
   there is not enough evidence to stand behind a number
 * title, company, location, work model, posting age
+* **IN SCOPE / UNCERTAIN** - the career-scope verdict, and **OUT OF SCOPE ·
+  <reason>** on the views where such a job appears at all
 * **Evidence: HIGH / MEDIUM / LOW** and one sentence saying how that was decided
 * the state that would otherwise force an open: `saved`, `needs enrichment`,
   `high potential`, `new`, and **APPLICATION · <status>** when the job is
@@ -74,7 +84,8 @@ shown:
 * **Personal fit** - base match score, Operating Style and Career Direction
   adjustments, the Personal Fit Score, confidence and where the description came from
 * **Estimated compensation** - a CHF range with base / bonus / equity and a confidence
-* **Details** - seniority, source, enrichment state, office days, application status
+* **Details** - seniority, source, enrichment state, career scope and why,
+  office days, application status
 * the **YES / MAYBE / NO** verdict
 * actions: Open job, Save, Apply, Analysis, **Enrich**, Track application, Ignore
 
@@ -411,6 +422,90 @@ leadership at least as loudly as implementation, the IC reading loses.
 description says "no direct reports, daily coding, individual on-call" is an IC
 role and is scored as one. A *Site Reliability Engineer* whose description says
 it owns an organisation is not.
+
+---
+
+## Career scope
+
+Five questions are kept apart, and this is the fifth:
+
+| question | answered by |
+| --- | --- |
+| Is the posting still live? | `state` (lifecycle) |
+| How much do we know about it? | `evidence_level` / `enrichment_state` |
+| Is it technically relevant? | Base Match Score |
+| Is it the shape of job I want? | Personal Fit (two adjustments) |
+| **Would I realistically apply for it?** | **Career scope** |
+
+A *Site Reliability Engineer - Observability* posting is technically relevant,
+scores well and is perfectly alive - and it is still not a job this profile
+applies for, because the mandate is writing Go, building tooling and carrying a
+pager. Relevance is not fit, and fit is not scope.
+
+Three values, stored on the job as `career_scope`:
+
+`IN_SCOPE`
+: leadership, ownership or technical-program scope in a technology domain -
+  Head of / Director / Engineering Manager / Principal TPM / platform,
+  reliability, transformation and engineering-excellence leadership.
+
+`OUT_OF_SCOPE`
+: a hands-on implementation role. Software / backend / frontend / full-stack /
+  mobile / data / ML engineering, implementation-heavy SRE, DevOps, cloud,
+  platform and infrastructure IC work, and architecture where delivery is the
+  primary responsibility.
+
+`UNCERTAIN`
+: not enough evidence to say either way, or a leadership role outside the
+  technology domain. Shown by default.
+
+### OUT_OF_SCOPE is not EXPIRED
+
+Career scope decides **one default view** and nothing else. No job is deleted,
+retired, re-stated or re-scored because of it; the score columns and the scope
+columns are written by the same code and read by nothing in common. An
+out-of-scope job keeps its state, its score, its feedback and its application
+link, and it is one filter chip away at all times.
+
+Two things override the classifier outright: a job the user **saved**, and a
+job that has an **application-tracking record**. Both stay in the default view
+whatever the scope says. An explicit decision is not something an automatic
+classification gets to overrule.
+
+### How a job is classified
+
+The same discipline as the IC detector, at a stricter setting - because here a
+verdict decides whether a job is *shown*, not whether it loses two points.
+
+1. **No description?** Only a title that names a software-development job
+   function outright (*Senior Backend Engineer*, *Staff Software Engineer*)
+   may be excluded. The ambiguous engineer titles - SRE, platform, DevOps,
+   cloud - stay UNCERTAIN until a description says which of the two roles they
+   are, and a thin *Head of SRE* is UNCERTAIN and visible.
+2. **Explicit engineering title?** It stands unless the responsibilities
+   describe *more* distinct kinds of ownership than of implementation. One
+   mention of mentoring does not make a backend engineer a manager.
+3. **Implementation dominant?** At least two distinct implementation families,
+   out-numbering the ownership families. When the title itself names a
+   leadership mandate the margin has to be clearer, so a Head of Platform whose
+   team builds tooling keeps its scope while a Head of SRE with no reports and
+   daily coding does not.
+4. **Ownership protects.** Two ownership families, or one plus a leadership
+   title, and the role is in scope. A technical leader may still read code.
+5. **Architecture is never decided by the word "Architect".** Strategy,
+   governance, standards and roadmaps are in scope; daily implementation is
+   not; neither is UNCERTAIN.
+
+The career-scope reading of "ownership" is deliberately stricter than the
+personal-fit model's: mentoring, coaching, hiring, "cross-team" and
+"operational excellence" are normal senior behaviour and count for nothing
+here, because at this weight they rescued every IC posting that mentioned
+them. `fit` keeps its broader reading - the two models measure different things.
+
+Every verdict carries a short reason (*Hands-on software engineering role*,
+*Implementation-heavy SRE IC role*, *Hands-on architecture role*) and a
+sentence naming the evidence it was read from, so an exclusion can always be
+read back and argued with.
 
 ---
 

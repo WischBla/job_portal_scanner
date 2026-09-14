@@ -177,16 +177,24 @@ class FrontendContractTests(unittest.TestCase):
         self.assertEqual(self.html.count('class="tab"'), 4)
 
     def test_the_band_filters_are_not_a_new_navigation_item_either(self):
-        """Eight views of one screen, still four tabs."""
+        """Ten views of one screen, still four tabs."""
         self.assertIn('id="job-filters"', self.html)
         self.assertEqual(self.html.count('class="tab"'), 4)
-        for key in ("'all'", "'top'", "'review'", "'edge'", "'low'", "'enrich'", "'saved'"):
+        for key in ("'leadership'", "'all'", "'out_of_scope'", "'top'", "'review'",
+                    "'edge'", "'low'", "'enrich'", "'saved'"):
             self.assertIn(key, self.js)
 
-    def test_all_active_is_the_default_view(self):
-        """No score threshold stands between a scan and the list."""
-        self.assertIn("filter: 'all'", self.js)
-        self.assertIn("view === 'all' ? '' : '?filter=' + view", self.js)
+    def test_the_leadership_scope_is_the_default_view(self):
+        """The default narrows career scope - and nothing else.
+
+        No score threshold stands between a scan and the list: the default
+        view selects on ``career_scope`` only, and every other view is one
+        chip away on the same screen.
+        """
+        self.assertIn("filter: 'leadership'", self.js)
+        self.assertIn("'?filter=' + view", self.js)
+        # The list request carries a view name and never a score bound.
+        self.assertNotIn('min_score', self.js)
 
 
 class JobActionApiTests(unittest.TestCase):

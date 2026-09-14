@@ -245,13 +245,19 @@ def rescore_job(conn, job, profile, scorer=None):
     """
     import json as _json
 
+    from . import career_scope as _scope
     from . import fit as _fit
     from .scoring import MatchScorer
 
     scorer = scorer or MatchScorer()
     result = scorer.score(dict(job), profile)
     columns = _fit.score_columns(result)
-    extra = ','.join('{0}=?'.format(c) for c in _fit.SCORE_COLUMNS)
+    # Career scope is recomputed here too, because the one thing that changes
+    # it is the one thing a rescore reacts to: a job that has just been given
+    # its description.  It is not part of the score and never reads one.
+    columns.update(_scope.scope_columns(job, result.get('evidence')))
+    written = tuple(_fit.SCORE_COLUMNS) + tuple(_scope.SCOPE_COLUMNS)
+    extra = ','.join('{0}=?'.format(c) for c in written)
     conn.execute(
         'UPDATE discovered_jobs SET match_score=?, match_label=?, match_reasons=?, '
         'match_concerns=?, match_breakdown=?, matched_terms=?, {0} WHERE id=?'.format(extra),
@@ -260,7 +266,7 @@ def rescore_job(conn, job, profile, scorer=None):
          _json.dumps(result['concerns'], ensure_ascii=False),
          _json.dumps(result['breakdown'], ensure_ascii=False),
          _json.dumps(result['terms'], ensure_ascii=False)]
-        + [columns[c] for c in _fit.SCORE_COLUMNS] + [job['id']])
+        + [columns[c] for c in written] + [job['id']])
     return result
 
 

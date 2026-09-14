@@ -2,7 +2,7 @@
 
 import json
 
-from . import fit
+from . import career_scope, fit
 from .db import load_profile, now_iso, row_to_dict, utc_now_iso
 from .filters import GROUP_LABELS, rejection_group
 from .scoring import EXCELLENT_FROM, STRONG_FROM
@@ -42,7 +42,7 @@ _JOB_COLUMNS = [
     'published_at', 'salary_min', 'salary_max', 'salary_currency', 'salary_period',
     'match_score', 'match_label', 'match_reasons', 'matched_terms', 'match_breakdown',
     'match_concerns', 'needs_details',
-] + list(fit.SCORE_COLUMNS)
+] + list(fit.SCORE_COLUMNS) + list(career_scope.SCOPE_COLUMNS)
 _JSON_COLUMNS = ('match_reasons', 'matched_terms', 'match_breakdown', 'match_concerns')
 
 
@@ -158,6 +158,10 @@ class JobRepository:
             'match_concerns': json.dumps(scored['concerns'], ensure_ascii=False),
         })
         values.update(fit.score_columns(scored, job))
+        # Career scope travels with the job, not with the score: it says which
+        # *view* the job belongs in, and it is written from the same text the
+        # evidence verdict was read from so the two can never disagree.
+        values.update(career_scope.scope_columns(job, scored.get('evidence')))
         # ``needs_details`` predates the evidence model and is still what the
         # card and the import flow read.  It is now derived rather than set by
         # hand, so the two can never disagree.
@@ -226,6 +230,7 @@ class JobRepository:
             'match_concerns': json.dumps(scored['concerns'], ensure_ascii=False),
         })
         values.update(fit.score_columns(scored, merged))
+        values.update(career_scope.scope_columns(merged, scored.get('evidence')))
         values['needs_details'] = 1 if values['enrichment_state'] == 'NEEDS_ENRICHMENT' else 0
         return values
 

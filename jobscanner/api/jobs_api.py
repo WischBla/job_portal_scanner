@@ -41,15 +41,17 @@ def _person(conn):
 
 
 @router.get('/jobs')
-def list_jobs(state: str = '', limit: int = 200, filter: str = jobs_service.ALL):
+def list_jobs(state: str = '', limit: int = 200, filter: str = jobs_service.DEFAULT_VIEW):
     """The Jobs list.
 
     ``filter`` selects one of the views in ``jobs_service.FILTERS`` and
-    defaults to *all active jobs*.  It is a view and only a view: no value of
-    it changes a job's state, and there is no score threshold anywhere on this
-    path.
+    defaults to *Leadership & Management* - the active jobs whose career scope
+    is IN_SCOPE or UNCERTAIN, plus every saved or tracked job regardless of
+    scope.  It is a view and only a view: no value of it changes a job's
+    state, nothing is expired or deleted by it, and there is no score
+    threshold anywhere on this path.
     """
-    view = filter if filter in jobs_service.FILTERS else jobs_service.ALL
+    view = filter if filter in jobs_service.FILTERS else jobs_service.DEFAULT_VIEW
     with connect() as conn:
         settings = load_settings(conn)
         include_ignored = state == 'IGNORED' or not settings.get('scan_hide_ignored', True)
