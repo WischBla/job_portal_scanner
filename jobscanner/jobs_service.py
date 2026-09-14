@@ -23,6 +23,10 @@ from . import compensation
 from . import evidence as evidence_mod
 from .ai import service as ai_service
 from .db import connect, row_to_dict
+#: The application pipeline's own vocabulary.  The Jobs screen shows a tracked
+#: job's status; it does not get to invent one, and it does not get to decide
+#: which statuses are still live either.
+from .schema_v2 import CLOSED_STATUSES, canonical_status
 #: Recommendation bands, read from the Personal Fit Score.  The single source
 #: of truth is `scoring`; they are re-exported here because the Jobs screen and
 #: the counts query have always imported them from this module.
@@ -36,6 +40,24 @@ MAX_CONCERNS = 3
 #: 64 must never appear above a priority-B job that scored 82, so the score is
 #: always the first term of the ordering and the posting date the last.
 PRIORITY_ORDER = "CASE w.priority WHEN 'A' THEN 0 WHEN 'B' THEN 1 WHEN 'C' THEN 2 ELSE 3 END"
+
+#: The tracked application that belongs to a job, resolved inside the very
+#: query that reads the job.  The Jobs screen highlights every job that is
+#: already in the pipeline, and it has several hundred cards: asking for a
+#: status per card would be one request per row.  There is no second source of
+#: truth here - the status is the one in ``applications``.
+#:
+#: The link is recorded from both ends (``discovered_jobs.application_id`` and
+#: ``applications.job_id``) because an application can be created from a job or
+#: pointed at one later, so both are followed and the explicit link wins.
+APPLICATION_STATUS_SQL = (
+    '(SELECT a.status FROM applications a '
+    'WHERE a.id = j.application_id OR a.job_id = j.id '
+    'ORDER BY CASE WHEN a.id = j.application_id THEN 0 ELSE 1 END, a.id DESC LIMIT 1)')
+
+#: Every read of a job carries its application status with it.
+JOB_SELECT = 'SELECT j.*, {0} AS application_status FROM discovered_jobs j'.format(
+    APPLICATION_STATUS_SQL)
 
 #: Personal verdict on a job.  Recorded for later calibration only - nothing
 #: in the scorer or the filters reads it, so a "NO" never silently changes how
@@ -186,6 +208,11 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
     if settings.get('salary_show_estimates', True):
         estimate = compensation.get_or_create(job, settings=settings, conn=conn)
 
+    # Carried by the row itself (see ``JOB_SELECT``), so a list of several
+    # hundred cards still costs exactly one query.
+    raw_status = str(job.get('application_status') or '').strip()
+    application_status = canonical_status(raw_status) if raw_status else ''
+
     card = {
         'id': job['id'],
         'title': job.get('title') or '',
@@ -248,6 +275,15 @@ def to_card(row, conn, settings, person=None, with_ai=False, full=False):
         'state': job.get('state') or 'NEW',
         'is_new': bool(job.get('is_new')),
         'application_id': job.get('application_id'),
+        # Whether this job is already in the application pipeline, and where.
+        # Read from ``applications`` and nowhere else: the Jobs screen shows
+        # the tracking record, it does not keep a second one.  A job that is
+        # tracked but closed (Rejected, Withdrawn) is still tracked and still
+        # says so - it is only not a live thread any more.
+        'has_application': bool(application_status),
+        'application_status': application_status,
+        'application_active': (bool(application_status)
+                               and application_status not in CLOSED_STATUSES),
         'compensation': estimate,
     }
     if full:
@@ -272,7 +308,7 @@ def list_cards(conn=None, state='', limit=200, include_ignored=False, view=ALL):
     conn = conn or connect()
     try:
         settings = load_settings(conn)
-        sql = ('SELECT j.* FROM discovered_jobs j '
+        sql = (JOB_SELECT + ' '
                'LEFT JOIN company_watchlist w ON w.company_name = j.company COLLATE NOCASE')
         params = []
         if state:
@@ -301,7 +337,7 @@ def get_card(job_id, conn=None, with_ai=True):
     owns = conn is None
     conn = conn or connect()
     try:
-        row = conn.execute('SELECT * FROM discovered_jobs WHERE id=?', (job_id,)).fetchone()
+        row = conn.execute(JOB_SELECT + ' WHERE j.id=?', (job_id,)).fetchone()
         if row is None:
             return None
         return to_card(row_to_dict(row), conn, load_settings(conn), with_ai=with_ai, full=True)

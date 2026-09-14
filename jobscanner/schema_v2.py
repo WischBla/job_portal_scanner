@@ -171,6 +171,12 @@ STATUS_MAP = {
 APPLICATION_STATUSES = ['Preparation', 'Applied', 'Screening', 'Interview',
                         'Final', 'Offer', 'Rejected', 'Withdrawn']
 
+#: The two terminal, negative outcomes.  An application in one of these is
+#: over: it is still tracked, still shown and still counted, but it is not a
+#: live thread any more and nothing may present it as one.  ``Offer`` is
+#: terminal too and deliberately not in here - it is the good ending.
+CLOSED_STATUSES = ('Rejected', 'Withdrawn')
+
 #: Locally curated market data.  Deliberately coarse: these are public-range
 #: estimates for Swiss senior technology roles, not offer data.  ``role_family``
 #: is matched with the keyword table in ``compensation.py``.

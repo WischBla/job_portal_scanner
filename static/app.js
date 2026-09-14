@@ -7,7 +7,13 @@ const state = { view: 'jobs', jobs: [], counts: {}, config: null, profile: null,
   feedbackReasons: [], listMode: 'active', lastScan: null,
   /* 'all' is the default view and it means every active job, whatever it
      scored. A filter has never been allowed to be a lifecycle. */
-  filter: 'all', filterOptions: null };
+  filter: 'all', filterOptions: null,
+  /* Which job cards are open. Deliberately a plain Set in memory and nothing
+     more: expansion is how the user is reading the list right now, not a
+     property of the job, so it is never sent anywhere and never stored. A
+     reload starts with every card closed, which is the state that makes a
+     list of several hundred jobs scannable. */
+  expanded: new Set() };
 
 /* Why a job was a yes or a no. Recorded for later calibration; nothing retrains. */
 const FEEDBACK_REASONS_NEGATIVE = ['Too stakeholder-heavy', 'Too political / external',
@@ -214,9 +220,17 @@ function releasePageHeight(pixels) {
    scroll because the document no longer reaches that far is the damage. Pad
    the shortfall first, then let the anchor put the page back. */
 function removeCard(node, anchorId) {
+  keepingPlace(anchorId, () => node.remove());
+}
+
+/* Change the list without letting the page move: hold the card the user is
+   looking at on its pixel row, and pad the document when the change makes it
+   too short for the current scroll position. Removing a card does this, and
+   so does collapsing one - both take height out of the list. */
+function keepingPlace(jobId, mutate) {
   const wanted = window.scrollY + window.innerHeight;
-  const point = anchor(anchorId);
-  node.remove();
+  const point = anchor(jobId);
+  mutate();
   const shortfall = wanted - document.documentElement.scrollHeight;
   if (shortfall > 0) holdPageHeight(shortfall);
   releaseAnchor(point);
@@ -318,12 +332,60 @@ function humanClass(value) {
   return value.toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
+/* --------------------------------------------------------------- job card ---
+   A card is closed until the user opens it.
+
+   The list is a review queue of several hundred jobs, so a closed card carries
+   exactly what a "open this one / skip this one" decision needs - title,
+   company, personal fit and its band, location, whether the job is saved,
+   whether it still needs enrichment, whether it is already an application, and
+   how much the score is worth. Everything else - the reasons, the concerns,
+   the fit breakdown, the compensation estimate, the description details and
+   every action - lives in the body and is built the first time the card is
+   opened.
+
+   Nothing about the open/closed state is persisted or sent anywhere: it is in
+   `state.expanded` and a reload starts from closed. */
+
+/* The tracked application, shown as text and not only as a colour. A closed
+   application (Rejected, Withdrawn) keeps its badge: it is still tracked, it
+   is just not a live thread any more. */
+function applicationBadge(job) {
+  if (!job.has_application || !job.application_status) return null;
+  return el('span', {
+    class: 'badge application' + (job.application_active ? ' active' : ' closed'),
+    text: 'APPLICATION · ' + String(job.application_status).toUpperCase(),
+    title: 'Tracked in Applications: ' + job.application_status,
+  });
+}
+
+/* Buttons, links and form controls inside the header do their own job. Only
+   the inert parts of the header toggle the card. */
+function isActionTarget(node) {
+  const interactive = ['button', 'a', 'input', 'select', 'textarea', 'label'];
+  for (let cursor = node; cursor && cursor !== document; cursor = cursor.parentNode) {
+    if (interactive.indexOf(String(cursor.tagName || '').toLowerCase()) >= 0) return true;
+  }
+  return false;
+}
+
 function jobCard(job) {
   const cls = job.classification.toLowerCase().replace(/\s+/g, '-');
   const meta = [job.company, job.location, job.work_model];
   if (job.age) meta.push(job.age);
+  const open = state.expanded.has(job.id);
+  const bodyId = 'job-body-' + job.id;
 
-  const head = el('div', { class: 'card-head' }, [
+  const toggle = el('button', {
+    class: 'card-toggle', 'aria-expanded': open ? 'true' : 'false',
+    'aria-controls': bodyId,
+    'aria-label': (open ? 'Collapse' : 'Expand') + ' ' + job.title,
+    title: open ? 'Collapse' : 'Expand',
+    onclick: () => toggleJob(job),
+  }, [el('span', { class: 'chevron', 'aria-hidden': 'true', text: '›' })]);
+
+  const head = el('div', { class: 'card-head',
+    onclick: (event) => { if (!isActionTarget(event.target)) toggleJob(job); } }, [
     el('div', { class: 'score ' + cls + (job.provisional ? ' provisional' : ''),
       title: job.provisional
         ? 'Provisional: ' + job.score + ' from the title, company and location alone. '
@@ -347,6 +409,7 @@ function jobCard(job) {
         job.high_potential
           ? el('span', { class: 'badge warn', text: 'high potential' }) : null,
         job.needs_details ? el('span', { class: 'badge warn', text: 'needs enrichment' }) : null,
+        applicationBadge(job),
       ]),
       el('div', { class: 'card-meta', html: meta.filter(Boolean).map(escapeHtml).join('<span class="sep">/</span>') }),
       /* How much the number above is worth. Shown on every card, not only
@@ -358,8 +421,36 @@ function jobCard(job) {
         job.evidence_detail ? el('span', { class: 'muted', text: job.evidence_detail }) : null,
       ]),
     ]),
+    toggle,
   ]);
 
+  // The body exists closed and empty: it is what `aria-controls` points at,
+  // and it is filled the first time the card is opened.
+  const body = el('div', { class: 'card-body', id: bodyId, hidden: !open });
+  if (open) fillCardBody(body, job);
+
+  // The id is what every in-place update and every viewport anchor addresses
+  // the card by, so it has to survive a re-render.
+  return el('div', { class: 'card' + (job.state === 'IGNORED' ? ' ignored' : '')
+    + (open ? ' open' : '') + trackedClass(job), 'data-job-id': job.id }, [head, body]);
+}
+
+/* The one visual cue for a job that is already in the pipeline. Subtle by
+   design, and never the only cue - the badge above says the same in words. */
+function trackedClass(job) {
+  if (!job.has_application) return '';
+  return job.application_active ? ' tracked tracked-active' : ' tracked tracked-closed';
+}
+
+/* Everything below the header. Built on demand, once per card. */
+function fillCardBody(body, job) {
+  if (body.dataset.filled) return body;
+  body.dataset.filled = '1';
+  jobDetail(job).forEach((node) => node && body.appendChild(node));
+  return body;
+}
+
+function jobDetail(job) {
   /* An alert gave us a title, a company and a link - and no description. The
      card says plainly what the score was computed from, and offers the two
      ways to fix it. It is never hidden: a job nobody can judge yet is not a
@@ -404,6 +495,8 @@ function jobCard(job) {
         job.discovered_via === 'linkedin' ? 'Discovered via: <b>LinkedIn alert</b>' : '',
         'Enrichment: <b>' + escapeHtml(String(job.enrichment_state || '').replace(/_/g, ' ')) + '</b>',
         job.office_days ? 'Office days: <b>' + job.office_days + '</b>' : '',
+        job.has_application && job.application_status
+          ? 'Application: <b>' + escapeHtml(job.application_status) + '</b>' : '',
       ].filter(Boolean).join('<br>') }),
     ]),
   ]);
@@ -439,16 +532,52 @@ function jobCard(job) {
         onclick: (event) => enrichJob(job, event.target), title:
           'Look for the canonical description again' }),
     el('span', { class: 'spacer' }),
-    el('button', { class: 'small ghost', onclick: () => addToApplications(job), text: 'Track application' }),
+    job.has_application && job.application_status
+      ? el('span', { class: 'muted tracked-note',
+        text: 'Tracked in Applications: ' + job.application_status })
+      : null,
+    el('button', { class: 'small ghost', onclick: () => addToApplications(job),
+      text: job.has_application ? 'Open application' : 'Track application' }),
     job.state === 'IGNORED'
       ? el('button', { class: 'small', onclick: () => restoreJob(job), text: 'Restore' })
       : el('button', { class: 'small ghost danger', onclick: () => ignoreJob(job), text: 'Ignore' }),
   ]);
 
-  // The id is what every in-place update and every viewport anchor addresses
-  // the card by, so it has to survive a re-render.
-  return el('div', { class: 'card' + (job.state === 'IGNORED' ? ' ignored' : ''),
-    'data-job-id': job.id }, [head, incomplete, detail, verdict, actions]);
+  return [incomplete, detail, verdict, actions];
+}
+
+/* Open or close one card.
+
+   Only that card is touched: the list is not rebuilt, nothing is re-sorted,
+   nothing is fetched and the ranking the backend decided is untouched. The
+   card keeps its pixel row, and closing a card - which takes height out of the
+   list exactly like removing one - cannot let the browser clamp the scroll. */
+function toggleJob(job, open) {
+  const node = cardNode(job.id);
+  if (!node) return;
+  const body = node.querySelector('.card-body');
+  const toggle = node.querySelector('.card-toggle');
+  const show = open === undefined ? !state.expanded.has(job.id) : !!open;
+  if (show) state.expanded.add(job.id);
+  else state.expanded.delete(job.id);
+
+  const before = node.getBoundingClientRect().height;
+  keepingPlace(job.id, () => {
+    if (body) {
+      if (show) fillCardBody(body, job);
+      body.hidden = !show;
+    }
+    node.classList.toggle('open', show);
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+      toggle.setAttribute('aria-label', (show ? 'Collapse' : 'Expand') + ' ' + job.title);
+      toggle.setAttribute('title', show ? 'Collapse' : 'Expand');
+    }
+  });
+  // An opened card gives the list back the height a spacer may still be
+  // holding from an earlier Ignore.
+  const grew = node.getBoundingClientRect().height - before;
+  if (grew > 0) releasePageHeight(grew);
 }
 
 function escapeHtml(value) {
