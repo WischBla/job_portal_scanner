@@ -52,26 +52,61 @@ Exceptional / Strong, Worth reviewing, Edge, Low priority, **Needs
 enrichment**, Saved, and the Ignored button. They are views, not lifecycle: no
 chip changes a job's state, its score or its persistence.
 
-Each card shows:
+**Cards are closed by default.** The list is a review queue of several hundred
+jobs, so a closed card carries exactly what a *read this one / skip this one*
+decision needs and nothing else:
 
 * the score and its band - **Exceptional** (85+), **Strong** (75+), **Worth
   reviewing** (65+), **Edge** (55+), **Low priority** - or `provisional` when
   there is not enough evidence to stand behind a number
-* **Evidence: HIGH / MEDIUM / LOW** and one sentence saying how that was decided
 * title, company, location, work model, posting age
+* **Evidence: HIGH / MEDIUM / LOW** and one sentence saying how that was decided
+* the state that would otherwise force an open: `saved`, `needs enrichment`,
+  `high potential`, `new`, and **APPLICATION · <status>** when the job is
+  already in the pipeline
+
+The chevron - or any inert part of the header - opens the card. Buttons and
+form controls inside it never do. Opening one shows what the card has always
+shown:
+
 * **Why it matches** - at most 5 reasons
 * **Potential concerns** - at most 3
+* **Personal fit** - base match score, Operating Style and Career Direction
+  adjustments, the Personal Fit Score, confidence and where the description came from
 * **Estimated compensation** - a CHF range with base / bonus / equity and a confidence
+* **Details** - seniority, source, enrichment state, office days, application status
+* the **YES / MAYBE / NO** verdict
 * actions: Open job, Save, Apply, Analysis, **Enrich**, Track application, Ignore
+
+The detail is built the first time a card is opened and then kept, so a closed
+list of 200 jobs is roughly a fifth of the DOM of an open one and toggling
+costs no request. Open/closed is memory only - it is never stored and never
+sent anywhere, so a reload starts with everything closed.
 
 A LOW-evidence card says so plainly and offers **Enrich** (go and look for the
 canonical description) and **Add description** (paste it yourself). It is never
 hidden. See [Evidence and enrichment](#evidence-and-enrichment).
 
+### Jobs you are already applying for
+
+A job that has a record on the Applications screen says so on its card, in
+words, while closed: **APPLICATION · APPLIED**, **· SCREENING**,
+**· INTERVIEW**, **· FINAL**, **· OFFER**. A live one also gets a very pale
+green tint and a green edge; the tint is a hint, never the message, and the
+badge says the same thing on its own.
+
+**Rejected** and **Withdrawn** keep their badge and do *not* get the green: a
+finished thread must not read like a live one, so it is tinted grey instead.
+
+There is no second tracking mechanism here. The status comes from the
+`applications` row the Applications screen already owns, resolved inside the
+same query that reads the jobs - one query for the whole list, whatever it
+costs to draw, and never one request per card.
+
 A card action never moves the page. The card being worked on keeps its exact
-pixel position, the list is not rebuilt and a verdict never re-sorts the
-ranking under the reader - re-ranking happens on a scan or an explicit rescore,
-not while someone is reviewing.
+pixel position - opening and closing included - the list is not rebuilt and a
+verdict never re-sorts the ranking under the reader; re-ranking happens on a
+scan or an explicit rescore, not while someone is reviewing.
 
 **Ignore** is reversible rather than guarded by a confirmation: the card leaves
 the list and the toast offers **UNDO**, which puts the job back where it was,

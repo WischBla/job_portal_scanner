@@ -84,13 +84,44 @@ button.danger { color: var(--bad); }
 button.small { padding: 3px 8px; font-size: 13px; }
 
 /* ----------------------------------------------------------------- cards */
+/* A card is closed by default: the list is a review queue of several hundred
+   jobs, so a closed row is deliberately compact and an open one gets the
+   roomier padding the detail needs. */
 .card {
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: var(--surface); padding: 16px 18px;
+  background: var(--surface); padding: 11px 14px;
 }
+.card.open { padding: 16px 18px; }
 .card.ignored { opacity: .55; }
 
-.card-head { display: flex; gap: 16px; align-items: flex-start; }
+/* A job that is already in the application pipeline. The tint is a hint and
+   nothing more - the badge in the header says the same thing in words, so the
+   colour is never the only indicator. */
+.card.tracked-active {
+  background: #f4faf5; border-color: #cbe4d2; box-shadow: inset 3px 0 0 #7fae8d;
+}
+/* Rejected and Withdrawn: still tracked, still badged - but over, so it must
+   not read as a live thread. Grey, never the active green. */
+.card.tracked-closed {
+  background: #fafafa; border-color: var(--line); box-shadow: inset 3px 0 0 var(--line-strong);
+}
+
+.card-head { display: flex; gap: 16px; align-items: flex-start; cursor: pointer; }
+/* The chevron, and the only part of the header that is itself a control. */
+.card-toggle {
+  flex: 0 0 auto; align-self: center; border-color: transparent; background: none;
+  color: var(--text-faint); padding: 4px 8px; line-height: 1;
+}
+.card-toggle:hover { color: var(--text); background: #f5f6f8; }
+.card-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card-toggle .chevron {
+  display: inline-block; font-size: 17px; transform: rotate(90deg);
+  transition: transform .12s ease-out;
+}
+.card.open .card-toggle .chevron { transform: rotate(270deg); }
+@media (prefers-reduced-motion: reduce) {
+  .card-toggle .chevron { transition: none; }
+}
 .score { flex: 0 0 62px; text-align: center; }
 .score .value { font-size: 24px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .score .class { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
@@ -133,6 +164,13 @@ button.small { padding: 3px 8px; font-size: 13px; }
 }
 .badge.new { border-color: var(--accent); color: var(--accent); }
 .badge.warn { border-color: var(--warn); color: var(--warn); }
+/* The application state in words. Present on every tracked job, closed ones
+   included, so the tint is never carrying the meaning on its own. */
+.badge.application {
+  text-transform: uppercase; letter-spacing: .04em; font-weight: 600;
+}
+.badge.application.active { border-color: #4f9068; color: #1b6236; background: #ecf6ef; }
+.badge.application.closed { border-color: var(--line-strong); color: #5b6169; background: #f1f2f4; }
 
 /* A job imported from an alert: enough to rank it, not enough to trust it. */
 .needs-details {
@@ -166,8 +204,9 @@ button.small { padding: 3px 8px; font-size: 13px; }
 .comp .row { display: block; }
 .comp .conf { margin-top: 4px; display: block; color: var(--text-faint); font-size: 12px; }
 
-.card-actions { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; }
+.card-actions { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .card-actions .spacer { flex: 1; }
+.card-actions .tracked-note { white-space: nowrap; }
 
 /* -------------------------------------------------------------- pipeline */
 .pipeline { display: flex; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 20px; overflow-x: auto; }
