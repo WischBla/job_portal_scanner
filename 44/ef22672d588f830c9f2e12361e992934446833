@@ -1,0 +1,39 @@
+README.md
+  s_989f75f59eeb93::t_92c04351604bb3 55-57,63-71,74-75,77-78,81-85,90-105,107-109
+jobscanner/jobs_service.py
+  s_989f75f59eeb93::t_890b62541b98cc 26-29
+  s_989f75f59eeb93::t_a4606ae65e0f9d 44-60
+  s_989f75f59eeb93::t_8ca5f514bb349f 285-286
+  s_989f75f59eeb93::t_ccf37013254991 211-215,278-284,311,340
+  s_989f75f59eeb93::t_5ad5795d101a7c 61
+tests/test_collapsed_job_list.py
+  s_989f75f59eeb93::t_be77fb06ff1a9a 1-463
+tests/js/collapsed_cards_harness.js
+  s_989f75f59eeb93::t_0b0f22f7915a57 115
+  s_989f75f59eeb93::t_633de661d0b188 1-114,116-357,360,362-392,394-560
+  s_989f75f59eeb93::t_bc05d0d042fc85 358-359,361,393
+static/app.js
+  s_989f75f59eeb93::t_bfcfe899d7f403 335-356,358-371,376-388,412,424,427-453,498-499,535-540,546-580
+  s_989f75f59eeb93::t_0b0f22f7915a57 357
+  s_989f75f59eeb93::t_385cc5a6378168 10-16,223-230,232-233
+static/styles.css
+  s_989f75f59eeb93::t_9c241d6371631a 87-89,92,94,97-124,167-173,207,209
+jobscanner/schema_v2.py
+  s_989f75f59eeb93::t_09181ff53bb8f9 174-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "44ef22672d588f830c9f2e12361e992934446833",
+  "prompts": {},
+  "sessions": {
+    "s_989f75f59eeb93": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ce11f0d-a958-43bb-94bf-63eab89a4539",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
