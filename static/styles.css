@@ -145,6 +145,19 @@ button.small { padding: 3px 8px; font-size: 13px; }
 .conf-medium { color: var(--text-soft); }
 .conf-low { color: var(--warn); }
 
+/* Career scope: would this role realistically be applied for? A separate
+   statement from the score and from the evidence, so it gets its own small
+   chip and nothing louder. */
+.scope {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0 5px; color: var(--text-faint); white-space: nowrap;
+}
+.scope-in-scope { color: var(--good); border-color: var(--good); }
+.scope-uncertain { color: var(--text-soft); }
+.scope-out-of-scope { color: var(--text-faint); border-color: var(--line-strong);
+  white-space: normal; }
+
 /* The four numbers of the personal-fit model, base score included. */
 .fit { display: flex; flex-direction: column; gap: 4px; }
 .fit-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

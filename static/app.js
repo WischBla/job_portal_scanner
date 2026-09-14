@@ -5,9 +5,12 @@
 
 const state = { view: 'jobs', jobs: [], counts: {}, config: null, profile: null,
   feedbackReasons: [], listMode: 'active', lastScan: null,
-  /* 'all' is the default view and it means every active job, whatever it
-     scored. A filter has never been allowed to be a lifecycle. */
-  filter: 'all', filterOptions: null,
+  /* 'leadership' is the default view: every active job whose career scope is
+     IN SCOPE or UNCERTAIN, plus every saved or tracked job whatever its scope.
+     Hands-on implementation roles are one chip away under 'All active' and
+     'Out of scope' - a filter has never been allowed to be a lifecycle, and no
+     job is expired, deleted or re-stated by a career-scope verdict. */
+  filter: 'leadership', filterOptions: null,
   /* Which job cards are open. Deliberately a plain Set in memory and nothing
      more: expansion is how the user is reading the list right now, not a
      property of the job, so it is never sent anywhere and never stored. A
@@ -359,6 +362,26 @@ function applicationBadge(job) {
   });
 }
 
+/* The career-scope indicator: would this role realistically be applied for?
+   Deliberately one small chip on the evidence line and nothing more - it is a
+   fifth, independent statement about the job and it must not compete with the
+   score. An OUT OF SCOPE card only ever appears under 'All active', under
+   'Out of scope', or because the user saved or started tracking it; there it
+   carries the one-line reason, so an exclusion can always be read back and
+   argued with. */
+function scopeBadge(job) {
+  const scope = job.career_scope || 'UNCERTAIN';
+  const text = { IN_SCOPE: 'IN SCOPE', UNCERTAIN: 'UNCERTAIN',
+    OUT_OF_SCOPE: 'OUT OF SCOPE' }[scope] || 'UNCERTAIN';
+  const words = scope === 'OUT_OF_SCOPE' && job.career_scope_reason
+    ? text + ' · ' + job.career_scope_reason : text;
+  return el('span', {
+    class: 'scope scope-' + scope.toLowerCase().replace(/_/g, '-'),
+    text: words,
+    title: job.career_scope_detail || words,
+  });
+}
+
 /* Buttons, links and form controls inside the header do their own job. Only
    the inert parts of the header toggle the card. */
 function isActionTarget(node) {
@@ -416,6 +439,7 @@ function jobCard(job) {
          on the incomplete ones: "78, confidence HIGH" and "78, provisional"
          are different claims and the difference has to be visible. */
       el('div', { class: 'evidence' }, [
+        scopeBadge(job),
         el('span', { class: 'conf conf-' + String(job.confidence || 'LOW').toLowerCase(),
           text: 'Evidence: ' + (job.evidence || 'LOW') }),
         job.evidence_detail ? el('span', { class: 'muted', text: job.evidence_detail }) : null,
@@ -494,6 +518,9 @@ function jobDetail(job) {
         job.source ? 'Source: <b>' + escapeHtml(job.source) + '</b>' : '',
         job.discovered_via === 'linkedin' ? 'Discovered via: <b>LinkedIn alert</b>' : '',
         'Enrichment: <b>' + escapeHtml(String(job.enrichment_state || '').replace(/_/g, ' ')) + '</b>',
+        'Career scope: <b>' + escapeHtml(String(job.career_scope || 'UNCERTAIN').replace(/_/g, ' '))
+          + '</b>' + (job.career_scope_detail ? '<br><span class="muted">'
+          + escapeHtml(job.career_scope_detail) + '</span>' : ''),
         job.office_days ? 'Office days: <b>' + job.office_days + '</b>' : '',
         job.has_application && job.application_status
           ? 'Application: <b>' + escapeHtml(job.application_status) + '</b>' : '',
@@ -625,13 +652,14 @@ function renderJobs() {
 /* A full reload of the list. Used when the data really did change wholesale
    (a scan, an import); it still keeps the viewport where it was.
 
-   The default really is "all active": no score threshold is applied here or
-   on the server, so a Low Priority job and a job nothing is known about are
-   both in the list the user sees first. */
+   No score threshold is applied here or on the server, so a Low Priority job
+   and a job nothing is known about are both in the list the user sees first.
+   The one thing the default view does narrow is career scope, and it narrows
+   nothing else. */
 async function loadJobs(anchorJobId) {
   const ignored = state.listMode === 'ignored';
-  const view = state.filter || 'all';
-  const query = ignored ? '?state=IGNORED' : (view === 'all' ? '' : '?filter=' + view);
+  const view = state.filter || 'leadership';
+  const query = ignored ? '?state=IGNORED' : '?filter=' + view;
   const data = await api('/api/jobs' + query);
   state.jobs = data.jobs;
   state.counts = data.counts;
@@ -656,7 +684,7 @@ function renderFilters() {
     if (entry.key === 'ignored') return;         // reachable through its own button
     const count = counts[entry.key];
     wrap.appendChild(el('button', {
-      class: 'chip' + ((state.filter || 'all') === entry.key ? ' on' : ''),
+      class: 'chip' + ((state.filter || 'leadership') === entry.key ? ' on' : ''),
       text: entry.label + (count === undefined ? '' : ' (' + count + ')'),
       onclick: () => selectFilter(entry.key),
     }));
@@ -688,7 +716,9 @@ function renderSummary() {
 
 /* The chips the screen falls back to before the first response arrives. */
 const DEFAULT_FILTERS = [
+  { key: 'leadership', label: 'Leadership & Management' },
   { key: 'all', label: 'All active' },
+  { key: 'out_of_scope', label: 'Out of scope' },
   { key: 'top', label: 'Exceptional / Strong' },
   { key: 'review', label: 'Worth reviewing' },
   { key: 'edge', label: 'Edge' },

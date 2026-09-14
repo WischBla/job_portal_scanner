@@ -31,7 +31,7 @@ _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 #: and unpacked into a different checkout on another.
 _WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def set_db_path(path):
@@ -585,6 +585,22 @@ def migrate(conn):
     conn.execute("UPDATE discovered_jobs SET enrichment_state='NEEDS_ENRICHMENT', "
                  "evidence_level='LOW', fit_confidence='LOW' WHERE enrichment_state=''")
 
+    # -- migration 013: career scope ---------------------------------------
+    # Whether a role is realistic for the intended career direction is a fifth
+    # question, separate from the lifecycle, the enrichment state, the base
+    # score and the personal-fit adjustments - and it is the only one of the
+    # five that decides which *view* a job appears in by default.
+    #
+    # It is still not a lifecycle.  OUT_OF_SCOPE is not EXPIRED: no row is
+    # deleted, retired or re-stated here, and a job classified out of scope
+    # keeps its score, its state, its feedback and its application link.  One
+    # filter chip shows it again.
+    _add_column(conn, 'discovered_jobs', 'career_scope', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'career_scope_reason', "TEXT NOT NULL DEFAULT ''")
+    _add_column(conn, 'discovered_jobs', 'career_scope_detail', "TEXT NOT NULL DEFAULT ''")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_career_scope '
+                 'ON discovered_jobs(career_scope)')
+
     _seed_sources(conn)
     _seed_presets(conn)
     _seed_watchlist(conn)
@@ -604,9 +620,38 @@ def migrate(conn):
 
     _portabilise_document_paths(conn)
     _assess_existing_evidence(conn)
+    _classify_career_scope(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
+
+
+CAREER_SCOPE_MARKER_KEY = 'career_scope_classified'
+
+
+def _classify_career_scope(conn):
+    """Give every stored job its career-scope verdict.
+
+    Runs for rows that do not have one yet, which makes it both the one-shot
+    migration of an existing database and the repair path for a row written by
+    some code path that predates the classifier.  Purely additive: the three
+    ``career_scope*`` columns are the only thing written, so a job's state, its
+    score, its feedback and its application link cannot be touched from here.
+    """
+    from . import career_scope
+
+    rows = conn.execute(
+        "SELECT id, title, description FROM discovered_jobs WHERE career_scope=''").fetchall()
+    for row in rows:
+        columns = career_scope.scope_columns({'title': row[1], 'description': row[2]})
+        conn.execute('UPDATE discovered_jobs SET career_scope=?, career_scope_reason=?, '
+                     'career_scope_detail=? WHERE id=?',
+                     (columns['career_scope'], columns['career_scope_reason'],
+                      columns['career_scope_detail'], row[0]))
+    if rows:
+        conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
+                     (CAREER_SCOPE_MARKER_KEY, now_iso()))
+    return len(rows)
 
 
 EVIDENCE_MARKER_KEY = 'evidence_rescored'
