@@ -1,0 +1,62 @@
+jobscanner/api/applications_api.py
+  s_abb6093c9230d9::t_eae5a60d50b0f0 23
+  s_abb6093c9230d9::t_29884ca414cda1 1,3-18,21,24,63-67,69-71,75-81,83-107,110,114-115,142-158,185-192,195,197-208,210-249
+  s_abb6093c9230d9::t_1794d3d3faacd7 82
+jobscanner/application_documents.py
+  s_abb6093c9230d9::t_325b938dd45f3c 264-268,270,351,355,360
+  s_abb6093c9230d9::t_b5ad27a10b1070 338-350,352-354,356-359,361-364
+  s_abb6093c9230d9::t_50be43e70de012 228-229,236-238
+  s_abb6093c9230d9::t_1794d3d3faacd7 65
+  s_abb6093c9230d9::t_61ecefa4dc6abe 1-64,66-227,230-235,239-263,269,271-337,365-379
+jobscanner/documents.py
+  s_abb6093c9230d9::t_155d48a1d25510 117,147
+  s_abb6093c9230d9::t_325b938dd45f3c 126-138
+  s_abb6093c9230d9::t_1794d3d3faacd7 165-168
+jobscanner/schema_v2.py
+  s_abb6093c9230d9::t_4fee6e9512f0c7 125-129,133-141,143,145-159,161-162
+jobscanner/applications.py
+  s_abb6093c9230d9::t_37bfa0f12a98d2 1,3-27,75,77-79,86-95,108-113,117,145-157,161-177,185-222,236-242
+  s_abb6093c9230d9::t_ae83ae72906a5d 28,158-160,243-245
+  s_abb6093c9230d9::t_6f3cd33c4ecf4d 52-62,223-235,317-320,322,325-329,332-340
+  s_abb6093c9230d9::t_63f9c5672e3194 246-247
+jobscanner/api/jobs_api.py
+  s_abb6093c9230d9::t_6c1bb9a2d6a1a5 212,219-254
+  s_abb6093c9230d9::t_bada70b26f65aa 9
+  s_abb6093c9230d9::t_4012d302bb4049 255-256
+static/styles.css
+  s_abb6093c9230d9::t_68f9b74a901dec 224-262
+tests/js/application_cards_harness.js
+  s_abb6093c9230d9::t_7bbe4769c2b84f 1-197,199-496
+  s_abb6093c9230d9::t_a9f993aeb53908 198
+README.md
+  s_abb6093c9230d9::t_afa3591abaa932 138-198,849
+  s_abb6093c9230d9::t_67c6f03e2faac0 927-935,941,963-964
+jobscanner/apply/assistant.py
+  s_abb6093c9230d9::t_06daee7fde3b67 288
+jobscanner/db.py
+  s_abb6093c9230d9::t_fddc913ffbed80 34,621-632,641-717
+  s_abb6093c9230d9::t_5b8242ce42b131 718-719
+static/app.js
+  s_abb6093c9230d9::t_1794d3d3faacd7 1525-1526
+  s_abb6093c9230d9::t_2a3bd8f134b243 1123-1125,1310-1314
+  s_abb6093c9230d9::t_f255579a1fc5a4 1129-1145,1147-1153,1157-1173,1175-1177,1179,1182,1189,1191-1215,1217,1219-1220,1224-1309,1315-1524,1527-1543,1545-1549,1551-1570,1573-1581,1584,1612,1626-1628,1630,1685
+tests/test_application_tracking.py
+  s_abb6093c9230d9::t_a9f993aeb53908 367
+  s_abb6093c9230d9::t_c2c39641535715 1-366,368-841
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "3034376d93d12b81e9168b46bc4168e1331e44d6",
+  "prompts": {},
+  "sessions": {
+    "s_abb6093c9230d9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5bbcfa89-dc1f-4eb5-8edb-55382287d30c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Sebastian Bierwisch <sebastian.bierwisch@amplimind.io>"
+    }
+  }
+}
