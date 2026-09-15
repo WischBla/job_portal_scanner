@@ -135,8 +135,67 @@ The second button, **Import LinkedIn Alert**, is described below.
 A simple pipeline: Preparation, Applied, Screening, Interview, Final, Offer,
 Rejected, Withdrawn. Each application keeps company, role, job URL, the match
 analysis, the salary estimate, contact, next action and next date, notes, the
-documents used, and a chronological activity timeline. Status changes write
-themselves into the timeline.
+documents it was sent with, and a chronological activity timeline. Status
+changes write themselves into the timeline.
+
+The list is a review queue like the Jobs screen: **cards are closed by
+default**, and a closed one carries role, company, location, status, salary
+estimate and the date it was sent. Opening one reveals the documents, the
+notes, the dates and the status history. Nothing about open or closed is
+stored - it is how you are reading the list right now, and a reload starts
+closed.
+
+**Changing a status takes one control.** Every card - closed or open - carries
+a status selector, and a record still in Preparation also gets **Mark as
+Applied**. Either one updates the record, the stage counters at the top, the
+card's own badge and the badge on the linked Jobs card, all without a reload.
+
+This is local tracking and nothing else. No status change here sends anything
+to an employer, submits a form or contacts an external service; it records
+something you did yourself.
+
+#### Dates
+
+`created_at`, `applied_at` and `updated_at`. `applied_at` is written **once**,
+the first time the record reaches a status that can only be reached by actually
+sending it (Applied, Screening, Interview, Final, Offer) - a record that goes
+Applied → Rejected → Applied keeps the day it was really sent. Rejected and
+Withdrawn never set it on their own: an application can be withdrawn, or turned
+down after an informal conversation, without ever having been submitted.
+
+`applied_date` - the older, editable date field - is filled in from it only
+when it is still empty, so a date you typed yourself always wins.
+
+#### Application documents
+
+An application is a record of what was sent to one company on one day, so
+attaching a document **copies the bytes**:
+
+```
+documents/applications/<application-id>/<kind>__<filename>
+```
+
+Two ways in: pick a file the Document Store already holds, or upload a PDF or
+DOCX straight onto this application. Either way the application ends up owning
+its own copy, which is the whole point - writing a better CV next month, making
+it primary, or deleting the old one changes nothing about what an application
+already sent says it was sent with. The apply assistant's uploads are kept the
+same way, marked `APPLY_ASSISTANT`.
+
+Kinds: CV / Resume, Cover Letter, Additional Document, Certificate / Reference,
+Other. None of them is required, and an empty package never blocks a status
+change - what counts as ready is your call. An application with no documents
+says *No application documents attached* rather than inventing one.
+
+Files are served through one endpoint, addressed by row id:
+`GET /api/applications/{id}/documents/{document_id}/file`. No filesystem path
+ever reaches the browser, and a path that does not resolve inside
+`documents/applications/` is refused rather than served.
+
+#### Status history
+
+A lightweight list of events, not a workflow engine: two statuses and a
+timestamp per change, shown in the open card as `Preparation → Applied`.
 
 ### Profile
 
@@ -787,6 +846,7 @@ documents/cv/
 documents/motivation/
 documents/references/
 documents/certificates/
+documents/applications/<id>/   the documents one application was sent with
 ```
 
 `data/` and `documents/` are git-ignored. Personal documents and the database are
@@ -864,12 +924,21 @@ pipeline (`Beworben` → `Applied`), with the original label preserved in the
 application's notes. Jobs scored by V1 are re-explained once with the current
 scorer so old and new cards read the same way.
 
+An application that already pointed at a document-store file has that pointer
+turned into a real copy under `documents/applications/<id>/`, so the record
+stops depending on a file the store is free to replace. The original link table
+is renamed to `application_documents_v1` rather than dropped. A file that had
+already gone missing keeps its association and its filename and is reported as
+missing - nothing is invented for it. `applied_at` is backfilled only from a
+date the record already carried, and only when it is not still in Preparation:
+a date typed into a draft is not a submission.
+
 ---
 
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 427 tests
+.venv/bin/python -m pytest tests -q      # 651 tests
 .venv/bin/python run.py --reload         # auto-reload
 ```
 
@@ -891,7 +960,8 @@ scorer so old and new cards read the same way.
 | `jobscanner/apply/` | Playwright assistant, ATS adapters, field mapping |
 | `jobscanner/person.py` | the personal profile |
 | `jobscanner/documents.py` | document metadata; files stay on disk |
-| `jobscanner/applications.py` | pipeline, timeline, linked documents |
+| `jobscanner/applications.py` | pipeline, status transitions, timeline |
+| `jobscanner/application_documents.py` | what an application was sent with, kept as a copy |
 | `jobscanner/api/` | FastAPI routers |
 | `static/` | the frontend: one HTML file, one CSS file, one JS file |
 

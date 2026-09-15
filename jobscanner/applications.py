@@ -1,7 +1,31 @@
-"""The application pipeline and its chronological timeline."""
+"""The application pipeline, its documents and its chronological timeline.
 
-from .db import connect, now_iso, row_to_dict
-from .schema_v2 import APPLICATION_STATUSES, canonical_status
+An application is a record of something that was done, not a counter.  Three
+things follow from that and live here:
+
+``set_status``
+    The single writer of ``applications.status``.  Everything that changes a
+    status - the selector on the card, "Mark as Applied", the detail dialog -
+    goes through it, so the timestamp, the history entry and the timeline note
+    can never disagree with the status itself.
+
+``applied_at``
+    Set exactly once, the first time the record reaches a status that can only
+    be reached by actually sending the application.  Going back to Applied
+    after a rejection does not rewrite it: the date it was sent is a fact about
+    the past.
+
+``documents``
+    Delegated to :mod:`jobscanner.application_documents`, which keeps a copy of
+    what was sent rather than a pointer at the current CV.
+
+Nothing in this module ever contacts an employer.  Every status here is local
+tracking of something the user did themselves.
+"""
+
+from . import application_documents as appdocs
+from .db import SUBMITTED_STATUSES, connect, now_iso, row_to_dict
+from .schema_v2 import APPLICATION_STATUSES, CLOSED_STATUSES, canonical_status
 
 EDITABLE = ('company', 'position', 'level', 'location', 'work_model', 'source', 'job_url',
             'applied_date', 'status', 'last_response', 'summary', 'next_action',
@@ -25,7 +49,17 @@ def list_applications(conn=None, status=''):
         sql += (" ORDER BY CASE status WHEN 'Offer' THEN 0 WHEN 'Final' THEN 1 "
                 "WHEN 'Interview' THEN 2 WHEN 'Screening' THEN 3 WHEN 'Applied' THEN 4 "
                 "WHEN 'Preparation' THEN 5 ELSE 6 END, updated_at DESC")
-        return [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+        rows = [_decorate(row_to_dict(r)) for r in conn.execute(sql, params).fetchall()]
+        # The card can be expanded without a second request, so the documents
+        # and the history come along - in two queries for the whole list, not
+        # two per card.
+        documents = appdocs.list_many([r['id'] for r in rows], conn)
+        history = _history_many([r['id'] for r in rows], conn)
+        for row in rows:
+            row['documents'] = documents.get(row['id'], [])
+            row['document_summary'] = appdocs.summary(row['documents'])
+            row['status_history'] = history.get(row['id'], [])
+        return rows
     finally:
         if owns:
             conn.close()
@@ -38,13 +72,25 @@ def get_application(application_id, conn=None):
         row = conn.execute('SELECT * FROM applications WHERE id=?', (application_id,)).fetchone()
         if row is None:
             return None
-        data = row_to_dict(row)
+        data = _decorate(row_to_dict(row))
         data['events'] = list_events(application_id, conn)
-        data['documents'] = list_documents(application_id, conn)
+        data['documents'] = appdocs.list_for(application_id, conn)
+        data['document_summary'] = appdocs.summary(data['documents'])
+        data['status_history'] = list_status_history(application_id, conn)
         return data
     finally:
         if owns:
             conn.close()
+
+
+def _decorate(data):
+    """The two derived facts every screen asks for, computed in one place."""
+    if not data:
+        return None
+    data['status'] = canonical_status(data.get('status'))
+    data['is_active'] = data['status'] not in CLOSED_STATUSES
+    data['is_applied'] = bool(str(data.get('applied_at') or '').strip())
+    return data
 
 
 def create(payload, conn=None):
@@ -59,9 +105,16 @@ def create(payload, conn=None):
         ts = now_iso()
         columns = list(data) + ['job_id', 'match_score', 'created_at', 'updated_at']
         values = list(data.values()) + [payload.get('job_id'), payload.get('match_score'), ts, ts]
+        # A record created straight into a submitted status was sent before it
+        # was tracked, so its applied timestamp is recorded at once rather than
+        # waiting for a transition that has already happened.
+        if data['status'] in SUBMITTED_STATUSES:
+            columns.append('applied_at')
+            values.append(ts)
         cursor = conn.execute('INSERT INTO applications ({0}) VALUES ({1})'.format(
             ','.join(columns), ','.join('?' for _ in columns)), values)
         application_id = cursor.lastrowid
+        _record_status_change(conn, application_id, '', data['status'], ts)
         add_event(application_id, {
             'event_type': 'Note',
             'note': 'Application created with status "{0}".'.format(data['status']),
@@ -89,17 +142,104 @@ def update(application_id, payload, conn=None):
                 updates[key] = canonical_status(value) if key == 'status' else value
         if not updates:
             return get_application(application_id, conn)
-        assignments = ','.join('{0}=?'.format(k) for k in updates)
-        conn.execute('UPDATE applications SET {0}, updated_at=? WHERE id=?'.format(assignments),
-                     list(updates.values()) + [now_iso(), application_id])
-        if 'status' in updates and updates['status'] != current['status']:
-            add_event(application_id, {
-                'event_type': 'Note',
-                'note': 'Status changed from "{0}" to "{1}".'.format(
-                    current['status'], updates['status']),
-            }, conn=conn, commit=False)
+        # A status inside a wider edit is still a status change, so it takes
+        # the same route as the selector on the card: one writer, one set of
+        # side effects.  Everything else is a plain field update.
+        status = updates.pop('status', None)
+        if updates:
+            assignments = ','.join('{0}=?'.format(k) for k in updates)
+            conn.execute(
+                'UPDATE applications SET {0}, updated_at=? WHERE id=?'.format(assignments),
+                list(updates.values()) + [now_iso(), application_id])
+        if status is not None:
+            _set_status(conn, current, status)
         conn.commit()
         return get_application(application_id, conn)
+    finally:
+        if owns:
+            conn.close()
+
+
+def set_status(application_id, status, conn=None):
+    """Move one application to another status.  The only way a status changes.
+
+    Purely local bookkeeping: nothing is sent anywhere, no form is submitted
+    and no employer is contacted.  Returns the updated record, or ``None`` if
+    there is no such application.
+    """
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        current = row_to_dict(conn.execute('SELECT * FROM applications WHERE id=?',
+                                           (application_id,)).fetchone())
+        if current is None:
+            return None
+        _set_status(conn, current, status)
+        conn.commit()
+        return get_application(application_id, conn)
+    finally:
+        if owns:
+            conn.close()
+
+
+def _set_status(conn, current, status):
+    """Write the status, the timestamps, the history entry and the note.
+
+    ``applied_at`` is written once and never rewritten: a record that goes
+    Applied -> Rejected -> Applied keeps the day it was really sent.
+    ``applied_date`` - the older, user-editable date field - is filled in from
+    it only when it is still empty, so a date the user typed themselves always
+    wins.
+    """
+    application_id = current['id']
+    target = canonical_status(status)
+    if target == canonical_status(current.get('status')):
+        return False
+    ts = now_iso()
+    fields = {'status': target, 'updated_at': ts}
+    if target in SUBMITTED_STATUSES and not str(current.get('applied_at') or '').strip():
+        fields['applied_at'] = ts
+        if not str(current.get('applied_date') or '').strip():
+            fields['applied_date'] = ts[:10]
+    conn.execute('UPDATE applications SET {0} WHERE id=?'.format(
+        ','.join('{0}=?'.format(k) for k in fields)),
+        list(fields.values()) + [application_id])
+    _record_status_change(conn, application_id, current.get('status') or '', target, ts)
+    add_event(application_id, {
+        'event_type': 'Note', 'event_date': ts[:10],
+        'note': 'Status changed from "{0}" to "{1}".'.format(
+            current.get('status') or '-', target),
+    }, conn=conn, commit=False)
+    return True
+
+
+# -- status history --------------------------------------------------------
+def _record_status_change(conn, application_id, from_status, to_status, changed_at):
+    conn.execute('INSERT INTO application_status_history '
+                 '(application_id, from_status, to_status, changed_at) VALUES (?,?,?,?)',
+                 (application_id, from_status, to_status, changed_at))
+
+
+def _history_many(application_ids, conn):
+    ids = [int(i) for i in application_ids]
+    out = {i: [] for i in ids}
+    if not ids:
+        return out
+    rows = conn.execute(
+        'SELECT * FROM application_status_history WHERE application_id IN ({0}) '
+        'ORDER BY application_id, id'.format(','.join('?' for _ in ids)), ids).fetchall()
+    for row in rows:
+        out[row['application_id']].append(row_to_dict(row))
+    return out
+
+
+def list_status_history(application_id, conn=None):
+    owns = conn is None
+    conn = conn or connect()
+    try:
+        return [row_to_dict(r) for r in conn.execute(
+            'SELECT * FROM application_status_history WHERE application_id=? ORDER BY id',
+            (application_id,)).fetchall()]
     finally:
         if owns:
             conn.close()
@@ -174,46 +314,30 @@ def delete_event(event_id, conn=None):
             conn.close()
 
 
-# -- documents used --------------------------------------------------------
+# -- documents sent --------------------------------------------------------
+# Thin delegations.  The store itself lives in ``application_documents`` because
+# what it does - copy the bytes, so the record stops depending on a file the
+# document store may replace tomorrow - is a topic of its own.
 def list_documents(application_id, conn=None):
-    owns = conn is None
-    conn = conn or connect()
-    try:
-        rows = conn.execute(
-            'SELECT ad.id AS link_id, ad.role, d.* FROM application_documents ad '
-            'JOIN documents d ON d.id = ad.document_id WHERE ad.application_id=? '
-            'ORDER BY d.kind', (application_id,)).fetchall()
-        return [row_to_dict(r) for r in rows]
-    finally:
-        if owns:
-            conn.close()
+    return appdocs.list_for(application_id, conn)
 
 
-def attach_document(application_id, document_id, role='', conn=None):
-    owns = conn is None
-    conn = conn or connect()
-    try:
-        conn.execute('INSERT OR IGNORE INTO application_documents '
-                     '(application_id, document_id, role, created_at) VALUES (?,?,?,?)',
-                     (application_id, document_id, role, now_iso()))
-        conn.commit()
-        return list_documents(application_id, conn)
-    finally:
-        if owns:
-            conn.close()
+def attach_document(application_id, document_id, kind='', label='', conn=None,
+                    source=appdocs.DEFAULT_SOURCE):
+    """Copy a document-store file onto this application, exactly as it is now."""
+    return appdocs.attach_stored(application_id, document_id, kind=kind, label=label,
+                                 conn=conn, source=source)
 
 
-def detach_document(application_id, document_id, conn=None):
-    owns = conn is None
-    conn = conn or connect()
-    try:
-        conn.execute('DELETE FROM application_documents WHERE application_id=? AND document_id=?',
-                     (application_id, document_id))
-        conn.commit()
-        return True
-    finally:
-        if owns:
-            conn.close()
+def upload_document(application_id, kind, filename, data, label='', conn=None,
+                    source='UPLOADED_FOR_APPLICATION'):
+    """Store a PDF or DOCX uploaded straight onto this application."""
+    return appdocs.attach_upload(application_id, kind, filename, data, label=label,
+                                 conn=conn, source=source)
+
+
+def detach_document(application_id, link_id, conn=None):
+    return appdocs.remove(application_id, link_id, conn=conn)
 
 
 # -- conversion from a discovered job --------------------------------------

@@ -31,7 +31,7 @@ _DB_PATH = Path(os.environ.get('JOB_TRACKER_DB') or DEFAULT_DB_PATH)
 #: and unpacked into a different checkout on another.
 _WORKSPACE_ROOT = Path(os.environ.get('JOB_ASSISTANT_WORKSPACE') or BASE_DIR)
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def set_db_path(path):
@@ -618,12 +618,103 @@ def migrate(conn):
     _add_column(conn, 'person_profile', 'strengths', "TEXT NOT NULL DEFAULT '[]'")
     _add_column(conn, 'person_profile', 'achievements', "TEXT NOT NULL DEFAULT '[]'")
 
+    # -- migration 014: an application is a record, not a status counter ---
+    # Three things an application could not carry before: when it was actually
+    # sent, how it got from one status to the next, and the documents it was
+    # sent with.  The first two are columns and a small event table; the third
+    # is a table rebuild, because a link row into ``documents`` cannot be made
+    # to hold history - the file it points at is the *current* CV and changes
+    # under it.  Nothing is lost: every existing link becomes a snapshot.
+    _add_column(conn, 'applications', 'applied_at', "TEXT NOT NULL DEFAULT ''")
+    _backfill_applied_at(conn)
+    _snapshot_legacy_application_documents(conn)
+    _seed_status_history(conn)
+
     _portabilise_document_paths(conn)
     _assess_existing_evidence(conn)
     _classify_career_scope(conn)
     conn.execute('INSERT OR REPLACE INTO schema_meta (key,value) VALUES (?,?)',
                  ('schema_version', str(SCHEMA_VERSION)))
     conn.commit()
+
+
+# -- migration 014 helpers -------------------------------------------------
+#: The statuses that can only be reached by actually sending the application.
+#: Reaching one of them is what sets ``applied_at``; ``Rejected`` and
+#: ``Withdrawn`` are deliberately absent, because an application can be
+#: withdrawn - or turned down after an informal conversation - without ever
+#: having been submitted, and this column must never claim otherwise.
+SUBMITTED_STATUSES = ('Applied', 'Screening', 'Interview', 'Final', 'Offer')
+
+
+def _backfill_applied_at(conn):
+    """Give existing records the applied timestamp their own data already shows.
+
+    The only evidence a V1/V2 row carries is ``applied_date``, a date without a
+    time, so the backfill is exactly that date at midnight and nothing more
+    precise is invented.  A record still in Preparation is skipped even when it
+    carries a date: a date typed into a draft is not a submission.
+    """
+    rows = conn.execute(
+        "SELECT id, status, applied_date FROM applications "
+        "WHERE applied_at='' AND applied_date<>'' AND status<>'Preparation'").fetchall()
+    for row in rows:
+        date = str(row[2] or '').strip()[:10]
+        if len(date) != 10:
+            continue
+        conn.execute('UPDATE applications SET applied_at=? WHERE id=?',
+                     ('{0}T00:00:00'.format(date), row[0]))
+    return len(rows)
+
+
+def _snapshot_legacy_application_documents(conn):
+    """Rebuild ``application_documents`` as immutable copies, once.
+
+    The V1 table held ``(application_id, document_id)`` - a pointer at a file
+    that the document store is free to replace or delete.  Each row becomes a
+    real copy under ``documents/applications/<id>/`` so the history stops
+    moving.  The old table is renamed, never dropped, so the original pointers
+    remain readable afterwards.
+
+    A row whose file has already gone missing keeps its association and its
+    filename and is reported as missing.  No file is ever invented for it.
+    """
+    from . import application_documents as appdocs
+
+    if not _table_exists(conn, 'application_documents'):
+        return 0
+    if 'stored_path' in _columns(conn, 'application_documents'):
+        return 0  # already the snapshot shape
+
+    legacy = conn.execute(
+        'SELECT application_id, document_id, role, created_at '
+        'FROM application_documents ORDER BY id').fetchall()
+    conn.execute('ALTER TABLE application_documents RENAME TO application_documents_v1')
+    conn.executescript(schema_v2.PERSON_DDL)
+    for row in legacy:
+        appdocs.adopt_legacy_link(conn, row[0], row[1], role=str(row[2] or ''),
+                                  created_at=str(row[3] or ''))
+    return len(legacy)
+
+
+def _seed_status_history(conn):
+    """One honest opening entry per application that has no history yet.
+
+    The transitions an existing record went through before this feature existed
+    were never recorded, and they are not reconstructed here.  What is known is
+    where the record stands and when it was created, so that is what is
+    written - and only for applications whose history is still empty, which
+    makes this a one-shot migration rather than a cost on every start.
+    """
+    rows = conn.execute(
+        'SELECT a.id, a.status, a.created_at FROM applications a '
+        'WHERE NOT EXISTS (SELECT 1 FROM application_status_history h '
+        '                  WHERE h.application_id = a.id)').fetchall()
+    for row in rows:
+        conn.execute('INSERT INTO application_status_history '
+                     '(application_id, from_status, to_status, changed_at) VALUES (?,?,?,?)',
+                     (row[0], '', str(row[1] or 'Preparation'), str(row[2] or now_iso())))
+    return len(rows)
 
 
 CAREER_SCOPE_MARKER_KEY = 'career_scope_classified'

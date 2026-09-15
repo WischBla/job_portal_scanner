@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .. import alert_import
+from .. import application_documents as appdocs
 from .. import applications as applications_mod
 from .. import enrichment, jobs_service, pipeline
 from ..ai import service as ai_service
@@ -208,10 +209,49 @@ def apply_to_job(job_id: int, payload: ApplyPayload = ApplyPayload()):
         conn.execute("UPDATE discovered_jobs SET state='SAVED', state_changed_at=? "
                      "WHERE id=? AND state IN ('NEW','SEEN')", (now_iso(), job_id))
         conn.commit()
+        _keep_assistant_uploads(conn, job_id, report['uploads'])
     report['session_id'] = session_id
     report['reminder'] = ('Nothing was submitted. Review every field in the browser window '
                           'and click Submit yourself.')
     return report
+
+
+
+def _keep_assistant_uploads(conn, job_id, uploads):
+    """Keep the exact files the assistant handed to the form on the application.
+
+    The assistant attaches whatever is primary *at that moment*; the primary CV
+    then moves on.  If this job is already tracked, each uploaded file is
+    snapshotted onto that application so the record keeps the version that was
+    really sent, marked ``APPLY_ASSISTANT``.
+
+    Nothing about the assistant's safety rules changes here: this runs after the
+    browser work is finished, it only copies a file the user already chose to
+    upload, and it never submits anything.  An untracked job gets nothing - no
+    application is created as a side effect of preparing a form.
+    """
+    row = conn.execute(
+        'SELECT id FROM applications WHERE job_id=? OR id=('
+        '  SELECT application_id FROM discovered_jobs WHERE id=?) LIMIT 1',
+        (job_id, job_id)).fetchone()
+    if row is None:
+        return 0
+    kept = 0
+    for upload in uploads or []:
+        document_id = upload.get('document_id')
+        if not document_id:
+            continue
+        if appdocs.has_stored_document(row['id'], document_id, source='APPLY_ASSISTANT',
+                                       conn=conn):
+            continue
+        try:
+            appdocs.attach_stored(row['id'], document_id, conn=conn,
+                                  source='APPLY_ASSISTANT',
+                                  notes='Uploaded to the employer form by the apply assistant.')
+            kept += 1
+        except appdocs.ApplicationDocumentError:
+            continue  # a missing file is reported by the document store, not here
+    return kept
 
 
 @router.post('/apply/close')
