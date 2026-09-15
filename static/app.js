@@ -1120,62 +1120,468 @@ async function addToApplications(job) {
     toast('Added to Applications: ' + application.company + ' - ' + application.position);
     await loadJobs();
     switchView('applications');
-    openApplication(application.id);
+    // The list has to be there before a card in it can be opened.
+    await loadApplications();
+    toggleApplication(application.id, true);
   } catch (err) { toast(err.message, true); }
 }
 
-/* ========================== APPLICATIONS ========================== */
-let applicationMeta = { statuses: [], event_types: [] };
+/* ========================== APPLICATIONS ==========================
+   The Applications screen is the same review-queue shape as the Jobs list: a
+   closed card carries what a "does this one need me today?" decision needs -
+   role, company, location, status, estimate, applied date - and everything
+   that maintains the record lives in the body, which is built the first time
+   the card is opened.
+
+   Two things are deliberately on the closed card anyway. The status selector,
+   because changing a status is the single most common thing done here and
+   making it cost a click to open first would be the whole complaint. And
+   "Mark as Applied" while the record is still in Preparation, because that is
+   the one transition that has a moment attached to it.
+
+   Nothing here submits anything to anybody. Every status is a local note about
+   something the user did themselves. */
+let applicationMeta = { statuses: [], event_types: [], closed_statuses: [],
+  document_kinds: [], document_formats: [] };
 let pipelineFilter = '';
+/* Which application cards are open. Memory only, exactly like state.expanded
+   for jobs: it is how the user is reading the list right now, not a property
+   of the application, so it is never sent anywhere and never stored. */
+const openApplications = new Set();
+/* The applications the screen is currently showing, by id - so one card can be
+   repainted after a status change without rebuilding the list. */
+let applicationsById = new Map();
 
 async function loadApplications() {
   const data = await api('/api/applications' + (pipelineFilter ? '?status=' + encodeURIComponent(pipelineFilter) : ''));
-  applicationMeta = { statuses: data.statuses, event_types: data.event_types };
+  applicationMeta = {
+    statuses: data.statuses || [], event_types: data.event_types || [],
+    closed_statuses: data.closed_statuses || [],
+    document_kinds: data.document_kinds || [], document_formats: data.document_formats || [],
+  };
+  renderPipeline(data.board);
 
+  applicationsById = new Map(data.applications.map((a) => [a.id, a]));
+  const list = clear($('#application-list'));
+  if (!data.applications.length) {
+    list.appendChild(el('div', { class: 'empty', text: pipelineFilter
+      ? 'No applications with status "' + pipelineFilter + '".'
+      : 'No applications yet. Track one from the Jobs screen.' }));
+    return;
+  }
+  data.applications.forEach((application) => list.appendChild(applicationCard(application)));
+}
+
+/* The stage counters. Rebuilt from whatever the backend last returned, which
+   is what makes a status change show up in them immediately. */
+function renderPipeline(board) {
   const pipeline = clear($('#pipeline'));
-  data.board.forEach((stage) => {
+  (board || []).forEach((stage) => {
     pipeline.appendChild(el('button', {
       class: 'stage' + (pipelineFilter === stage.status ? ' active' : ''),
+      'data-stage': stage.status,
       onclick: () => { pipelineFilter = pipelineFilter === stage.status ? '' : stage.status; loadApplications(); },
     }, [
       el('span', { class: 'n', text: String(stage.count) }),
       el('span', { class: 's', text: stage.status }),
     ]));
   });
-
-  const list = clear($('#application-list'));
-  if (!data.applications.length) {
-    list.appendChild(el('div', { class: 'empty', text: 'No applications yet. Track one from the Jobs screen.' }));
-    return;
-  }
-  data.applications.forEach((application) => {
-    list.appendChild(el('div', { class: 'card' }, [
-      el('div', { class: 'card-head' }, [
-        el('div', { class: 'card-title' }, [
-          el('h3', {}, [
-            el('span', { text: application.position }),
-            el('span', { class: 'badge', text: application.status }),
-          ]),
-          el('div', { class: 'card-meta', text: [application.company, application.location,
-            application.work_model].filter(Boolean).join(' / ') }),
-        ]),
-      ]),
-      el('div', { class: 'kv', html: [
-        application.next_action ? 'Next: <b>' + escapeHtml(application.next_action) + '</b>' : '',
-        application.follow_up_date ? 'Due: <b>' + escapeHtml(application.follow_up_date) + '</b>' : '',
-        application.salary_estimate ? 'Estimate: <b>' + escapeHtml(application.salary_estimate) + '</b>' : '',
-      ].filter(Boolean).join('<span class="sep"> · </span>') }),
-      el('div', { class: 'card-actions' }, [
-        el('button', { class: 'small', text: 'Open', onclick: () => openApplication(application.id) }),
-        application.job_url ? el('button', { class: 'small ghost', text: 'Job posting',
-          onclick: () => window.open(application.job_url, '_blank', 'noopener') }) : null,
-      ]),
-    ]));
-  });
 }
 
+function isClosedStatus(status) {
+  return applicationMeta.closed_statuses.indexOf(status) >= 0;
+}
+
+/* ------------------------------------------------------- application card */
+function applicationCard(application) {
+  const open = openApplications.has(application.id);
+  const bodyId = 'application-body-' + application.id;
+  const meta = [application.company, application.location, application.work_model];
+
+  const toggle = el('button', {
+    class: 'card-toggle', 'aria-expanded': open ? 'true' : 'false',
+    'aria-controls': bodyId,
+    'aria-label': (open ? 'Collapse' : 'Expand') + ' ' + application.position,
+    title: open ? 'Collapse' : 'Expand',
+    onclick: () => toggleApplication(application.id),
+  }, [el('span', { class: 'chevron', 'aria-hidden': 'true', text: '›' })]);
+
+  const head = el('div', { class: 'card-head',
+    onclick: (event) => { if (!isActionTarget(event.target)) toggleApplication(application.id); } }, [
+    el('div', { class: 'card-title' }, [
+      el('h3', {}, [
+        el('span', { text: application.position }),
+        el('span', { class: 'badge application ' + (application.is_active ? 'active' : 'closed'),
+          text: application.status }),
+      ]),
+      el('div', { class: 'card-meta', html: meta.filter(Boolean).map(escapeHtml).join('<span class="sep">/</span>') }),
+      el('div', { class: 'kv', html: [
+        application.salary_estimate ? 'Estimate: <b>' + escapeHtml(application.salary_estimate) + '</b>' : '',
+        appliedLine(application),
+        application.next_action ? 'Next: <b>' + escapeHtml(application.next_action) + '</b>' : '',
+        application.follow_up_date ? 'Due: <b>' + escapeHtml(application.follow_up_date) + '</b>' : '',
+      ].filter(Boolean).join('<span class="sep"> · </span>') }),
+    ]),
+    statusControl(application),
+    toggle,
+  ]);
+
+  const body = el('div', { class: 'card-body', id: bodyId, hidden: !open });
+  if (open) fillApplicationBody(body, application);
+
+  return el('div', {
+    class: 'card application-card' + (open ? ' open' : '')
+      + (application.is_active ? ' tracked tracked-active' : ' tracked tracked-closed'),
+    'data-application-id': application.id,
+  }, [head, body]);
+}
+
+/* "Applied 13 Sep 2026", and nothing at all when it has not been sent. A
+   record that was never submitted must not carry a date that looks like it
+   was. */
+function appliedLine(application) {
+  const stamp = String(application.applied_at || '').trim();
+  if (!stamp) return '';
+  return 'Applied: <b>' + escapeHtml(prettyDate(stamp)) + '</b>';
+}
+
+function prettyDate(stamp) {
+  const date = new Date(String(stamp).replace(' ', 'T'));
+  if (isNaN(date.getTime())) return String(stamp);
+  return date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function prettyStamp(stamp) {
+  const date = new Date(String(stamp).replace(' ', 'T'));
+  if (isNaN(date.getTime())) return String(stamp);
+  return prettyDate(stamp) + ' ' + date.toLocaleTimeString(undefined,
+    { hour: '2-digit', minute: '2-digit' });
+}
+
+/* The status selector, on every card, open or closed - plus the one-click
+   transition that matters while a package is still being put together. */
+function statusControl(application) {
+  const picker = selectBox('status', application.status, applicationMeta.statuses);
+  picker.className = 'status-picker';
+  picker.setAttribute('aria-label', 'Status of ' + application.position);
+  picker.addEventListener('change', () => changeStatus(application.id, picker.value));
+  return el('div', { class: 'status-control' }, [
+    picker,
+    application.status === 'Preparation'
+      ? el('button', { class: 'small primary mark-applied', text: 'Mark as Applied',
+        title: 'Record that you sent this application. Nothing is submitted anywhere.',
+        onclick: () => changeStatus(application.id, 'Applied') })
+      : null,
+  ]);
+}
+
+/* One status change: the record, the counters, this card and the Jobs screen.
+
+   The counters and the linked job state come back from the same request that
+   wrote the status, so the three cannot disagree. The Jobs list is marked
+   stale rather than refetched - it is not on screen, and it reloads on its own
+   when the user goes back to it. */
+async function changeStatus(applicationId, status) {
+  try {
+    const result = await api('/api/applications/' + applicationId + '/status',
+      { method: 'POST', body: { status } });
+    const application = result.application;
+    applicationsById.set(application.id, application);
+    renderPipeline(result.board);
+    if (result.job) applyJobApplicationState(result.job);
+    if (pipelineFilter && pipelineFilter !== application.status) {
+      // The card no longer belongs in the filtered list it is sitting in.
+      await loadApplications();
+    } else {
+      repaintApplication(application);
+    }
+    toast('Status: ' + application.status);
+  } catch (err) {
+    toast(err.message, true);
+    await loadApplications();
+  }
+}
+
+/* The Jobs screen shows the same fact from the other side. Its cached cards
+   are corrected here so switching back cannot show a stale badge even before
+   the list reloads. */
+function applyJobApplicationState(job) {
+  const cached = (state.jobs || []).find((j) => j.id === job.job_id);
+  if (!cached) return;
+  cached.has_application = job.has_application;
+  cached.application_status = job.application_status;
+  cached.application_active = job.application_active;
+  if (cardNode(cached.id)) replaceCard(cached);
+}
+
+/* Rebuild one card in place, keeping it open if it was open. */
+function repaintApplication(application) {
+  const node = $('#application-list > .card[data-application-id="' + application.id + '"]');
+  if (!node) return;
+  node.replaceWith(applicationCard(application));
+}
+
+function toggleApplication(applicationId, open) {
+  const application = applicationsById.get(applicationId);
+  const node = $('#application-list > .card[data-application-id="' + applicationId + '"]');
+  if (!application || !node) return;
+  const body = node.querySelector('.card-body');
+  const toggle = node.querySelector('.card-toggle');
+  const show = open === undefined ? !openApplications.has(applicationId) : !!open;
+  if (show) openApplications.add(applicationId);
+  else openApplications.delete(applicationId);
+  if (body) {
+    if (show) fillApplicationBody(body, application);
+    body.hidden = !show;
+  }
+  node.classList.toggle('open', show);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+    toggle.setAttribute('aria-label', (show ? 'Collapse' : 'Expand') + ' ' + application.position);
+    toggle.title = show ? 'Collapse' : 'Expand';
+  }
+}
+
+function fillApplicationBody(body, application) {
+  if (body.dataset.filled) return body;
+  body.dataset.filled = '1';
+  applicationDetail(application).forEach((node) => node && body.appendChild(node));
+  return body;
+}
+
+/* --------------------------------------------------------- expanded card */
+function applicationDetail(application) {
+  const blocks = [];
+
+  if (application.status === 'Preparation') blocks.push(preparationBlock(application));
+
+  const documents = el('div', { class: 'block wide documents-block' }, [
+    el('h4', { text: 'Application documents' }),
+  ]);
+  renderApplicationDocuments(documents, application);
+  blocks.push(documents);
+
+  blocks.push(el('div', { class: 'block' }, [
+    el('h4', { text: 'Dates' }),
+    el('div', { class: 'kv', html: [
+      'Created: <b>' + escapeHtml(prettyStamp(application.created_at)) + '</b>',
+      application.applied_at
+        ? 'Applied: <b>' + escapeHtml(prettyStamp(application.applied_at)) + '</b>'
+        : 'Applied: <b>not sent yet</b>',
+      'Updated: <b>' + escapeHtml(prettyStamp(application.updated_at)) + '</b>',
+    ].join('<br>') }),
+  ]));
+
+  blocks.push(el('div', { class: 'block' }, [
+    el('h4', { text: 'Status history' }),
+    (application.status_history || []).length
+      ? el('ul', { class: 'status-history' }, application.status_history.map((entry) => el('li', {}, [
+        el('span', { class: 'transition',
+          text: (entry.from_status || 'New') + ' → ' + entry.to_status }),
+        el('span', { class: 'when', text: prettyStamp(entry.changed_at) }),
+      ])))
+      : el('p', { class: 'muted', text: 'No status changes recorded yet.' }),
+  ]));
+
+  const notes = textarea('notes', application.notes);
+  notes.rows = 4;
+  const notesBlock = el('div', { class: 'block wide' }, [
+    el('h4', { text: 'Notes' }),
+    notes,
+    el('div', { class: 'card-actions' }, [
+      el('button', { class: 'small', text: 'Save notes', onclick: async () => {
+        try {
+          const updated = await api('/api/applications/' + application.id,
+            { method: 'PUT', body: { notes: notes.value } });
+          applicationsById.set(updated.id, updated);
+          toast('Notes saved.');
+        } catch (err) { toast(err.message, true); }
+      } }),
+    ]),
+  ]);
+  blocks.push(notesBlock);
+
+  const detail = el('div', { class: 'detail application-detail' }, blocks);
+
+  const actions = el('div', { class: 'card-actions' }, [
+    application.job_url
+      ? el('button', { class: 'small', text: 'Open job posting',
+        onclick: () => window.open(application.job_url, '_blank', 'noopener') })
+      : el('span', { class: 'muted', text: 'No job posting link recorded.' }),
+    el('button', { class: 'small', text: 'Full record',
+      onclick: () => openApplication(application.id) }),
+    el('span', { class: 'spacer' }),
+    el('button', { class: 'small ghost danger', text: 'Delete', onclick: async () => {
+      try {
+        await api('/api/applications/' + application.id, { method: 'DELETE' });
+        toast('Deleted.');
+        await loadApplications();
+        await loadJobs();
+      } catch (err) { toast(err.message, true); }
+    } }),
+  ]);
+
+  return [detail, actions];
+}
+
+/* Is the package ready? Said in words, for a record that has not been sent
+   yet. It never blocks the transition - what counts as ready is the user's
+   call, not this screen's. */
+function preparationBlock(application) {
+  const summary = application.document_summary || [];
+  const lines = [['cv', 'CV'], ['cover_letter', 'Cover Letter']].map(([kind, label]) => {
+    const found = summary.find((s) => s.kind === kind);
+    return label + ': <b>' + (found ? escapeHtml(found.filename) : 'not attached') + '</b>';
+  });
+  return el('div', { class: 'block wide preparation' }, [
+    el('h4', { text: 'Preparation' }),
+    el('div', { class: 'kv', html: lines.join('<br>') }),
+    el('div', { class: 'card-actions' }, [
+      el('button', { class: 'small primary', text: 'Mark as Applied',
+        title: 'Record that you sent this application. Nothing is submitted anywhere.',
+        onclick: () => changeStatus(application.id, 'Applied') }),
+      el('span', { class: 'muted', text: 'Local tracking only - nothing is sent.' }),
+    ]),
+  ]);
+}
+
+/* ------------------------------------------------- application documents */
+/* What was actually sent, kept as a copy. Replacing the primary CV in Profile
+   does not touch anything listed here, which is the whole point: an
+   application is a record of a day, not a pointer at today's file. */
+async function renderApplicationDocuments(wrap, application) {
+  const rows = clear(el('div', { class: 'app-documents' }));
+  const documents = application.documents || [];
+  wrap.querySelectorAll('.app-documents, .doc-attach').forEach((node) => node.remove());
+
+  if (!documents.length) {
+    rows.appendChild(el('p', { class: 'muted', text: 'No application documents attached' }));
+  } else {
+    documents.forEach((doc) => {
+      rows.appendChild(el('div', { class: 'app-document' }, [
+        el('div', { class: 'doc-kind', text: doc.kind_label }),
+        el('div', { class: 'doc-file' }, [
+          el('span', { class: 'doc-name', text: doc.original_filename }),
+          el('span', { class: 'doc-source', text: sourceLabel(doc.source) }),
+          doc.exists ? null : el('span', { class: 'badge warn', text: 'file missing' }),
+        ]),
+        el('div', { class: 'doc-actions' }, [
+          doc.exists
+            ? el('button', { class: 'small', text: 'Open', onclick: () =>
+              window.open('/api/applications/' + application.id + '/documents/' + doc.id + '/file',
+                '_blank', 'noopener') })
+            : null,
+          el('button', { class: 'small ghost', text: 'Replace',
+            onclick: () => attachDocumentDialog(application, doc) }),
+          el('button', { class: 'small ghost danger', text: 'Remove', onclick: async () => {
+            try {
+              await api('/api/applications/' + application.id + '/documents/' + doc.id,
+                { method: 'DELETE' });
+              await refreshApplication(application.id);
+              toast('Document removed from this application.');
+            } catch (err) { toast(err.message, true); }
+          } }),
+        ]),
+      ]));
+    });
+  }
+  wrap.appendChild(rows);
+  wrap.appendChild(el('div', { class: 'card-actions doc-attach' }, [
+    el('button', { class: 'small', text: '+ Attach document',
+      onclick: () => attachDocumentDialog(application, null) }),
+  ]));
+}
+
+function sourceLabel(source) {
+  return { DOCUMENT_STORE: 'from Document Store',
+    UPLOADED_FOR_APPLICATION: 'uploaded for this application',
+    APPLY_ASSISTANT: 'used by the apply assistant' }[source] || String(source || '');
+}
+
+/* Two ways in: pick a file the Document Store already holds, or upload a PDF
+   or DOCX straight onto this application. Either way a copy is kept here. */
+function attachDocumentDialog(application, replacing) {
+  const kinds = applicationMeta.document_kinds.map((k) => [k.kind, k.label]);
+  const formats = applicationMeta.document_formats.join(' or ') || 'PDF or DOCX';
+  const kindPicker = selectBox('document_kind', replacing ? replacing.document_kind : 'cv', kinds);
+  const body = el('div', {}, [
+    field('Document type', kindPicker),
+  ]);
+
+  const finish = async () => {
+    if (replacing) {
+      await api('/api/applications/' + application.id + '/documents/' + replacing.id,
+        { method: 'DELETE' });
+    }
+    closeDialog();
+    await refreshApplication(application.id);
+  };
+
+  const storeWrap = el('div', {});
+  body.appendChild(el('h3', { text: 'From the Document Store' }));
+  body.appendChild(storeWrap);
+  api('/api/profile/documents').then((data) => {
+    const options = (data.documents || []).filter((d) => d.exists)
+      .map((d) => [d.id, (d.kind_label || d.kind) + ' - '
+        + (d.original_filename || d.filename)]);
+    clear(storeWrap);
+    if (!options.length) {
+      storeWrap.appendChild(el('p', { class: 'muted',
+        text: 'The Document Store has no files yet. Add them under Profile.' }));
+      return;
+    }
+    const picker = selectBox('document_id', '', options);
+    storeWrap.appendChild(el('div', { class: 'card-actions' }, [
+      picker,
+      el('button', { class: 'small primary', text: 'Attach a copy', onclick: async () => {
+        try {
+          await api('/api/applications/' + application.id + '/documents', { method: 'POST',
+            body: { document_id: Number(picker.value), document_kind: kindPicker.value } });
+          await finish();
+          toast('Copied onto this application.');
+        } catch (err) { toast(err.message, true); }
+      } }),
+    ]));
+    storeWrap.appendChild(el('p', { class: 'hint',
+      text: 'A copy is stored with this application, so replacing the file in '
+        + 'Profile later will not change what this record says was sent.' }));
+  }).catch((err) => {
+    clear(storeWrap).appendChild(el('div', { class: 'notice warn', text: err.message }));
+  });
+
+  const file = el('input', { type: 'file', name: 'file', accept: '.pdf,.docx' });
+  body.appendChild(el('h3', { text: 'Upload a new file' }));
+  body.appendChild(field(formats + ' only', file));
+  body.appendChild(el('div', { class: 'card-actions' }, [
+    el('button', { class: 'small', text: 'Upload', onclick: async () => {
+      if (!file.files || !file.files.length) { toast('Choose a file first.', true); return; }
+      const form = new FormData();
+      form.append('file', file.files[0]);
+      form.append('document_kind', kindPicker.value);
+      try {
+        await api('/api/applications/' + application.id + '/documents/upload',
+          { method: 'POST', body: form });
+        await finish();
+        toast('Uploaded to this application.');
+      } catch (err) { toast(err.message, true); }
+    } }),
+  ]));
+
+  dialog(replacing ? 'Replace ' + replacing.kind_label : 'Attach document', body);
+}
+
+/* Re-read one application and repaint its card, leaving it open. */
+async function refreshApplication(applicationId) {
+  const application = await api('/api/applications/' + applicationId);
+  applicationsById.set(application.id, application);
+  repaintApplication(application);
+}
+
+/* The full record: every field, the documents and the activity timeline. The
+   card covers the day-to-day; this is where the rest of it is edited. */
 async function openApplication(applicationId) {
   const application = await api('/api/applications/' + applicationId);
+  applicationsById.set(application.id, application);
   const form = el('div', {});
   const body = el('div', {}, [form]);
 
@@ -1203,6 +1609,7 @@ async function openApplication(applicationId) {
         await api('/api/applications/' + applicationId, { method: 'PUT', body: readForm(form) });
         toast('Saved.');
         await loadApplications();
+        await loadJobs();
         openApplication(applicationId);
       } catch (err) { toast(err.message, true); }
     } }),
@@ -1216,11 +1623,11 @@ async function openApplication(applicationId) {
     } }),
   ]));
 
-  /* documents used */
-  body.appendChild(el('h2', { text: 'Documents used' }));
-  const docWrap = el('div', {});
+  /* the documents this application was sent with */
+  body.appendChild(el('h2', { text: 'Application documents' }));
+  const docWrap = el('div', { class: 'documents-block' });
   body.appendChild(docWrap);
-  renderApplicationDocuments(docWrap, applicationId, application.documents);
+  renderApplicationDocuments(docWrap, application);
 
   /* timeline */
   body.appendChild(el('h2', { text: 'Activity timeline' }));
@@ -1257,39 +1664,6 @@ async function openApplication(applicationId) {
   dialog(application.company + ' - ' + application.position, body);
 }
 
-async function renderApplicationDocuments(wrap, applicationId, attached) {
-  const all = (await api('/api/profile/documents')).documents;
-  clear(wrap);
-  if (attached.length) {
-    wrap.appendChild(el('table', {}, [el('tbody', {}, attached.map((doc) => el('tr', {}, [
-      el('td', { text: doc.kind_label || doc.kind }),
-      el('td', { text: doc.filename }),
-      el('td', { class: 'actions' }, [el('button', { class: 'small ghost', text: 'Remove', onclick: async () => {
-        await api('/api/applications/' + applicationId + '/documents/' + doc.id, { method: 'DELETE' });
-        const refreshed = await api('/api/applications/' + applicationId);
-        renderApplicationDocuments(wrap, applicationId, refreshed.documents);
-      } })]),
-    ])))]));
-  } else {
-    wrap.appendChild(el('p', { class: 'muted', text: 'No documents linked yet.' }));
-  }
-  const attachedIds = new Set(attached.map((d) => d.id));
-  const options = all.filter((d) => !attachedIds.has(d.id))
-    .map((d) => [d.id, (d.kind_label || d.kind) + ' - ' + d.filename]);
-  if (options.length) {
-    const picker = selectBox('document_id', '', options);
-    wrap.appendChild(el('div', { class: 'card-actions' }, [
-      picker,
-      el('button', { class: 'small', text: 'Attach', onclick: async () => {
-        await api('/api/applications/' + applicationId + '/documents',
-          { method: 'POST', body: { document_id: Number(picker.value), role: '' } });
-        const refreshed = await api('/api/applications/' + applicationId);
-        renderApplicationDocuments(wrap, applicationId, refreshed.documents);
-      } }),
-    ]));
-  }
-}
-
 function newApplicationDialog() {
   const form = el('div', {}, [
     el('div', { class: 'grid2' }, [
@@ -1308,7 +1682,7 @@ function newApplicationDialog() {
           const created = await api('/api/applications', { method: 'POST', body: readForm(form) });
           closeDialog();
           await loadApplications();
-          openApplication(created.id);
+          toggleApplication(created.id, true);
         } catch (err) { toast(err.message, true); }
       } }),
     ]),

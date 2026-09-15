@@ -285,6 +285,7 @@ class _Worker(threading.Thread):
                 page.set_input_files('[data-jsa-idx="{0}"]'.format(target['idx']),
                                      document['absolute_path'], timeout=6000)
                 uploads.append({'kind': target['kind'], 'filename': document['filename'],
+                                'document_id': document.get('id'),
                                 'label': target['label']})
             except Exception as exc:  # noqa: BLE001
                 report['review'].append({

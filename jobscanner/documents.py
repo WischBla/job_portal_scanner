@@ -114,13 +114,26 @@ def store(kind, filename, data, label='', notes='', conn=None):
                                       size_bytes, is_primary, notes, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
             (kind, label or default_label, language, target.name,
-             _relative_path(target), _mime_for(suffix), len(data),
+             _relative_path(target), mime_for(suffix), len(data),
              1 if kind in SINGLE_KINDS else 0, notes, ts, ts))
         conn.commit()
         return get(cursor.lastrowid, conn)
     finally:
         if owns:
             conn.close()
+
+
+def original_name(filename):
+    """Undo the ``<kind>__`` prefix :func:`store` puts on a file on disk.
+
+    The prefix is a storage detail - it keeps two kinds from colliding in the
+    same folder - and it is not part of the name the user gave the file.  This
+    gives that name back, which is what an application record should show for a
+    document it copied out of the store.
+    """
+    text = str(filename or '')
+    head, sep, tail = text.partition('__')
+    return tail if sep and head in KINDS and tail else text
 
 
 def _relative_path(target):
@@ -131,7 +144,7 @@ def _relative_path(target):
         return portable_document_path(target) or str(target)
 
 
-def _mime_for(suffix):
+def mime_for(suffix):
     return {
         '.pdf': 'application/pdf',
         '.doc': 'application/msword',
@@ -149,6 +162,10 @@ def _decorate(data):
     data['exists'] = path.exists()
     data['absolute_path'] = str(path)
     data['kind_label'] = KINDS.get(data['kind'], ('', data['kind'], ''))[1]
+    # The name the user gave the file, next to the ``<kind>__`` name it has on
+    # disk.  Both are kept: the stored name is what the file really is called,
+    # the original is what a picker or an application record should show.
+    data['original_filename'] = original_name(data['filename'])
     data['upload_allowed'] = upload_allowed(data['kind'])
     return data
 

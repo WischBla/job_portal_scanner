@@ -122,16 +122,44 @@ CREATE TABLE IF NOT EXISTS salary_benchmarks (
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_company ON salary_benchmarks(company);
 
+-- The documents an application was actually sent with.  A *copy*, never a
+-- pointer: ``stored_path`` addresses a file under ``documents/applications/``
+-- that belongs to this application alone, and ``source_document_id`` is
+-- provenance with deliberately no foreign key, so replacing or deleting the
+-- current primary CV cannot reach back into an application already sent.
 CREATE TABLE IF NOT EXISTS application_documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     application_id INTEGER NOT NULL,
-    document_id INTEGER NOT NULL,
+    document_kind TEXT NOT NULL DEFAULT 'other',
+    label TEXT NOT NULL DEFAULT '',
+    original_filename TEXT NOT NULL DEFAULT '',
+    stored_path TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'DOCUMENT_STORE',
+    source_document_id INTEGER,
     role TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    UNIQUE(application_id, document_id),
-    FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
-    FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
+    FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS idx_application_documents_app
+    ON application_documents(application_id, id);
+
+-- Status changes, in the order they happened.  A list of events, not a
+-- workflow engine: two statuses and a timestamp, written by the one function
+-- that is allowed to change a status.
+CREATE TABLE IF NOT EXISTS application_status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL,
+    from_status TEXT NOT NULL DEFAULT '',
+    to_status TEXT NOT NULL DEFAULT '',
+    changed_at TEXT NOT NULL,
+    FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_application_history_app
+    ON application_status_history(application_id, id);
 
 CREATE TABLE IF NOT EXISTS apply_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
